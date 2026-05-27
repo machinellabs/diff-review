@@ -6,6 +6,16 @@ Format: `[version] - YYYY-MM-DD` followed by `Added`, `Changed`, `Fixed`, or `Re
 
 ---
 
+## [0.2.0] - 2026-05-27
+
+### Added
+- `--pr URL` flag to review any GitHub PR directly by URL
+- `diff_review/github.py` — fetches PR diff from the GitHub API
+- Supports public repos with no auth; set `GITHUB_TOKEN` for private repos or to raise rate limits
+- Clear error messages for 401, 403, and 404 responses from GitHub
+
+---
+
 ## [0.1.0] - 2026-05-27
 
 ### Added

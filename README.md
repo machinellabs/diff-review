@@ -31,7 +31,28 @@ export ANTHROPIC_API_KEY=your-key-here
 
 Each user runs against their own Anthropic account. Your key is never shared.
 
+Optionally, set a GitHub token to review private repos or avoid rate limits:
+
+```bash
+export GITHUB_TOKEN=your-token-here  # optional — public repos work without it
+```
+
 ## Usage
+
+### Review a GitHub PR directly
+
+```bash
+# Public repo — no token needed
+diff-review --pr https://github.com/owner/repo/pull/123
+
+# Private repo
+GITHUB_TOKEN=your-token diff-review --pr https://github.com/owner/repo/pull/123
+
+# With JSON output
+diff-review --pr https://github.com/owner/repo/pull/123 --json
+```
+
+### Review local changes
 
 ```bash
 # Review staged changes before committing
@@ -141,10 +162,11 @@ git review-last
 
 ## Configuration
 
-| Environment variable | Default             | Description                        |
-|----------------------|---------------------|------------------------------------|
-| `ANTHROPIC_API_KEY`  | *(required)*        | Your Anthropic API key             |
-| `ANTHROPIC_MODEL`    | `claude-sonnet-4-6` | Model to use for review            |
+| Environment variable | Default             | Description                                        |
+|----------------------|---------------------|----------------------------------------------------|
+| `ANTHROPIC_API_KEY`  | *(required)*        | Your Anthropic API key                             |
+| `ANTHROPIC_MODEL`    | `claude-sonnet-4-6` | Model to use for review                            |
+| `GITHUB_TOKEN`       | *(optional)*        | GitHub personal access token for private repos     |
 
 ## Requirements
 
@@ -159,6 +181,7 @@ diff_review/
 ├── nodes.py      # Three agent steps: parse, review, synthesize
 ├── graph.py      # LangGraph workflow wiring
 ├── formatter.py  # Rich terminal display + JSON output
+├── github.py     # GitHub API client for fetching PR diffs
 └── cli.py        # Entry point and argument parsing
 ```
 
