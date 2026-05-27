@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from . import __version__
 from .graph import build_graph
 from .formatter import print_review
 
@@ -19,6 +20,11 @@ def main() -> None:
         "--json",
         action="store_true",
         help="Output results as JSON.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     args = parser.parse_args()
 
