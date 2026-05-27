@@ -36,6 +36,7 @@ def print_review(output: ReviewOutput, as_json: bool = False) -> None:
         table.add_column("File", width=30)
         table.add_column("Issue")
         table.add_column("Suggestion")
+        table.add_column("Evidence", style="dim")
 
         for issue in output.issues:
             sev_style = _SEVERITY_STYLE.get(issue.severity, "white")
@@ -44,6 +45,7 @@ def print_review(output: ReviewOutput, as_json: bool = False) -> None:
                 issue.file,
                 issue.description,
                 issue.suggestion,
+                issue.evidence,
             )
         console.print(table)
 

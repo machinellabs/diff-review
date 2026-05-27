@@ -7,6 +7,7 @@ class Issue(BaseModel):
     file: str
     description: str
     suggestion: str
+    evidence: str
 
 
 class ReviewOutput(BaseModel):
