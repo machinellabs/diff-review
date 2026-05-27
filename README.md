@@ -15,11 +15,10 @@ This mirrors how a real engineer reviews a PR: read each file carefully, then fo
 ## Install
 
 ```bash
-git clone https://github.com/machinellabs/diff-review
-cd diff-review
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+pipx install git+https://github.com/machinellabs/diff-review
 ```
+
+> Requires [pipx](https://pipx.pypa.io/stable/installation/). On macOS: `brew install pipx`
 
 ## Setup
 
