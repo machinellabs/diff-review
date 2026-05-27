@@ -1,7 +1,5 @@
-from typing import Annotated
 from typing_extensions import TypedDict
 from pydantic import BaseModel
-from langgraph.graph.message import add_messages
 
 
 class Issue(BaseModel):
@@ -21,5 +19,5 @@ class ReviewOutput(BaseModel):
 class ReviewState(TypedDict):
     diff: str
     file_chunks: list[str]
-    file_reviews: Annotated[list[str], add_messages]
+    file_reviews: list[str]
     output: ReviewOutput | None
