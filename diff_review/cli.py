@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from .graph import build_graph
 from .formatter import print_review
@@ -20,6 +21,10 @@ def main() -> None:
         help="Output results as JSON.",
     )
     args = parser.parse_args()
+
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        print("Error: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
+        sys.exit(1)
 
     if args.file:
         with open(args.file) as f:

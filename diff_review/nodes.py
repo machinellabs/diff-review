@@ -5,14 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .schema import ReviewState, ReviewOutput
 
-_api_key = os.environ.get("ANTHROPIC_API_KEY")
-if not _api_key:
-    raise RuntimeError(
-        "ANTHROPIC_API_KEY environment variable is not set. "
-        "Export it before running diff-review."
-    )
-
-_client = anthropic.Anthropic(api_key=_api_key)
+_client = anthropic.Anthropic()
 _MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 
@@ -44,25 +37,28 @@ def _review_chunk(chunk: str) -> str:
             ),
             messages=[{"role": "user", "content": f"Review this diff:\n\n{chunk}"}],
         )
+        if not response.content or response.stop_reason == "max_tokens":
+            raise RuntimeError(
+                f"Incomplete API response for chunk (stop_reason={response.stop_reason!r})"
+            )
+        return response.content[0].text
     except anthropic.APIError as e:
         raise RuntimeError(f"API error while reviewing chunk: {e}") from e
-
-    if not response.content or response.stop_reason == "max_tokens":
-        raise RuntimeError(
-            f"Incomplete API response for chunk (stop_reason={response.stop_reason!r})"
-        )
-
-    return response.content[0].text
 
 
 def review_chunks(state: ReviewState) -> dict:
     chunks = state["file_chunks"]
+    if not chunks:
+        return {"file_reviews": []}
     with ThreadPoolExecutor(max_workers=min(len(chunks), 8)) as executor:
         reviews = list(executor.map(_review_chunk, chunks))
     return {"file_reviews": reviews}
 
 
 def synthesize(state: ReviewState) -> dict:
+    if not state["file_reviews"]:
+        raise RuntimeError("No file reviews to synthesize — diff may be empty.")
+
     combined = "\n\n---\n\n".join(state["file_reviews"])
 
     try:
@@ -82,16 +78,16 @@ def synthesize(state: ReviewState) -> dict:
             ),
             messages=[{"role": "user", "content": f"Synthesize these file reviews:\n\n{combined}"}],
         )
+        if not response.content or response.stop_reason == "max_tokens":
+            raise RuntimeError(
+                f"Incomplete API response during synthesis (stop_reason={response.stop_reason!r})"
+            )
+        text = response.content[0].text
+        if not text.strip():
+            raise RuntimeError("Empty response from API during synthesis.")
+        data = json.loads(text)
     except anthropic.APIError as e:
         raise RuntimeError(f"API error during synthesis: {e}") from e
-
-    if not response.content or response.stop_reason == "max_tokens":
-        raise RuntimeError(
-            f"Incomplete API response during synthesis (stop_reason={response.stop_reason!r})"
-        )
-
-    try:
-        data = json.loads(response.content[0].text)
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Invalid JSON in synthesis response: {e}") from e
 
