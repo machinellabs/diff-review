@@ -1,0 +1,230 @@
+diff --git a/diff_review/__init__.py b/diff_review/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/diff_review/cli.py b/diff_review/cli.py
+new file mode 100644
+index 0000000..918b76f
+--- /dev/null
++++ b/diff_review/cli.py
+@@ -0,0 +1,36 @@
++import argparse
++import sys
++from .graph import build_graph
++from .formatter import print_review
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(
++        prog="diff-review",
++        description="Run an agentic code review on a git diff.",
++    )
++    parser.add_argument(
++        "file",
++        nargs="?",
++        help="Path to a diff file. Reads from stdin if omitted.",
++    )
++    parser.add_argument(
++        "--json",
++        action="store_true",
++        help="Output results as JSON.",
++    )
++    args = parser.parse_args()
++
++    if args.file:
++        with open(args.file) as f:
++            diff = f.read()
++    else:
++        diff = sys.stdin.read()
++
++    if not diff.strip():
++        print("Error: no diff provided.", file=sys.stderr)
++        sys.exit(1)
++
++    graph = build_graph()
++    result = graph.invoke({"diff": diff, "file_chunks": [], "file_reviews": [], "output": None})
++    print_review(result["output"], as_json=args.json)
+diff --git a/diff_review/formatter.py b/diff_review/formatter.py
+new file mode 100644
+index 0000000..f660ae6
+--- /dev/null
++++ b/diff_review/formatter.py
+@@ -0,0 +1,53 @@
++import json
++import sys
++from rich.console import Console
++from rich.panel import Panel
++from rich.table import Table
++from rich import box
++from .schema import ReviewOutput
++
++console = Console()
++
++_VERDICT_STYLE = {
++    "approve": "bold green",
++    "request_changes": "bold red",
++    "needs_discussion": "bold yellow",
++}
++
++_SEVERITY_STYLE = {
++    "high": "red",
++    "medium": "yellow",
++    "low": "blue",
++}
++
++
++def print_review(output: ReviewOutput, as_json: bool = False) -> None:
++    if as_json:
++        print(json.dumps(output.model_dump(), indent=2))
++        return
++
++    style = _VERDICT_STYLE.get(output.verdict, "bold white")
++    console.print(Panel(f"[{style}]{output.verdict.upper()}[/{style}]", title="Verdict"))
++    console.print(f"\n[bold]Summary[/bold]\n{output.summary}\n")
++
++    if output.issues:
++        table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
++        table.add_column("Severity", style="bold", width=10)
++        table.add_column("File", width=30)
++        table.add_column("Issue")
++        table.add_column("Suggestion")
++
++        for issue in output.issues:
++            sev_style = _SEVERITY_STYLE.get(issue.severity, "white")
++            table.add_row(
++                f"[{sev_style}]{issue.severity}[/{sev_style}]",
++                issue.file,
++                issue.description,
++                issue.suggestion,
++            )
++        console.print(table)
++
++    if output.highlights:
++        console.print("[bold green]Highlights[/bold green]")
++        for h in output.highlights:
++            console.print(f"  [green]✓[/green] {h}")
+diff --git a/diff_review/graph.py b/diff_review/graph.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/diff_review/nodes.py b/diff_review/nodes.py
+new file mode 100644
+index 0000000..c338df5
+--- /dev/null
++++ b/diff_review/nodes.py
+@@ -0,0 +1,63 @@
++import json
++import os
++import anthropic
++
++from .schema import ReviewState, ReviewOutput
++
++_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
++_MODEL = "claude-sonnet-4-6"
++
++
++def parse_diff(state: ReviewState) -> dict:
++    raw = state["diff"]
++    chunks, current = [], []
++    for line in raw.splitlines(keepends=True):
++        if line.startswith("diff --git") and current:
++            chunks.append("".join(current))
++            current = []
++        current.append(line)
++    if current:
++        chunks.append("".join(current))
++    return {"file_chunks": chunks}
++
++
++def review_chunks(state: ReviewState) -> dict:
++    reviews = []
++    for chunk in state["file_chunks"]:
++        response = _client.messages.create(
++            model=_MODEL,
++            max_tokens=1024,
++            system=(
++                "You are a senior software engineer reviewing a code diff. "
++                "Respond with a JSON object: "
++                '{\"issues\": [{\"severity\": \"low\"|\"medium\"|\"high\", '
++                '\"file\": \"string\", \"description\": \"string\", \"suggestion\": \"string\"}], '
++                '\"highlights\": [\"string\"]}. '
++                "Return valid JSON only, no markdown."
++            ),
++            messages=[{"role": "user", "content": f"Review this diff:\n\n{chunk}"}],
++        )
++        reviews.append(response.content[0].text)
++    return {"file_reviews": reviews}
++
++
++def synthesize(state: ReviewState) -> dict:
++    combined = "\n\n---\n\n".join(state["file_reviews"])
++    response = _client.messages.create(
++        model=_MODEL,
++        max_tokens=2048,
++        system=(
++            "You are a senior software engineer writing a final code review. "
++            "Synthesize the individual file reviews into one verdict. "
++            "Respond with a JSON object: "
++            '{\"verdict\": \"approve\"|\"request_changes\"|\"needs_discussion\", '
++            '\"summary\": \"string\", '
++            '\"issues\": [{\"severity\": \"low\"|\"medium\"|\"high\", \"file\": \"string\", '
++            '\"description\": \"string\", \"suggestion\": \"string\"}], '
++            '\"highlights\": [\"string\"]}. '
++            "Return valid JSON only, no markdown."
++        ),
++        messages=[{"role": "user", "content": f"Synthesize these file reviews:\n\n{combined}"}],
++    )
++    data = json.loads(response.content[0].text)
++    return {"output": ReviewOutput(**data)}
+diff --git a/diff_review/schema.py b/diff_review/schema.py
+new file mode 100644
+index 0000000..111f058
+--- /dev/null
++++ b/diff_review/schema.py
+@@ -0,0 +1,25 @@
++from typing import Annotated
++from typing_extensions import TypedDict
++from pydantic import BaseModel
++from langgraph.graph.message import add_messages
++
++
++class Issue(BaseModel):
++    severity: str
++    file: str
++    description: str
++    suggestion: str
++
++
++class ReviewOutput(BaseModel):
++    verdict: str
++    summary: str
++    issues: list[Issue]
++    highlights: list[str]
++
++
++class ReviewState(TypedDict):
++    diff: str
++    file_chunks: list[str]
++    file_reviews: Annotated[list[str], add_messages]
++    output: ReviewOutput | None
+diff --git a/pyproject.toml b/pyproject.toml
+new file mode 100644
+index 0000000..2238345
+--- /dev/null
++++ b/pyproject.toml
+@@ -0,0 +1,17 @@
++[project]
++name = "diff-review"
++version = "0.1.0"
++requires-python = ">=3.11"
++dependencies = [
++    "anthropic>=0.25.0",
++    "langgraph>=0.1.0",
++    "pydantic>=2.0.0",
++    "rich>=13.0.0",
++]
++
++[project.scripts]
++diff-review = "diff_review.cli:main"
++
++[build-system]
++requires = ["hatchling"]
++build-backend = "hatchling.build"
