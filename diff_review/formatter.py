@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import date
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -20,10 +21,55 @@ _SEVERITY_STYLE = {
     "low": "blue",
 }
 
+_SEVERITY_EMOJI = {
+    "high": "🔴",
+    "medium": "🟡",
+    "low": "🔵",
+}
 
-def print_review(output: ReviewOutput, as_json: bool = False) -> None:
+
+def format_json(output: ReviewOutput) -> str:
+    return json.dumps(output.model_dump(), indent=2)
+
+
+def format_markdown(output: ReviewOutput, source: str = "") -> str:
+    verdict_display = output.verdict.upper().replace("_", " ")
+    lines = [f"# diff-review: {verdict_display}\n"]
+
+    meta = [f"**Date:** {date.today()}"]
+    if source:
+        meta.append(f"**Source:** {source}")
+    lines.append("  \n".join(meta))
+    lines.append("\n---\n")
+    lines.append(f"## Summary\n\n{output.summary}\n")
+
+    if output.issues:
+        lines.append(f"---\n\n## Issues ({len(output.issues)} found)\n")
+        for issue in output.issues:
+            emoji = _SEVERITY_EMOJI.get(issue.severity, "⚪")
+            lines.append(f"### {emoji} {issue.severity.upper()} — `{issue.file}`\n")
+            lines.append(f"**Issue:** {issue.description}  ")
+            lines.append(f"**Suggestion:** {issue.suggestion}  ")
+            if issue.evidence:
+                lines.append(f"**Evidence:**\n```\n{issue.evidence}\n```")
+            lines.append("")
+
+    if output.highlights:
+        lines.append("---\n\n## Highlights\n")
+        for h in output.highlights:
+            lines.append(f"- ✓ {h}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def print_review(output: ReviewOutput, as_json: bool = False, as_markdown: bool = False) -> None:
     if as_json:
-        print(json.dumps(output.model_dump(), indent=2))
+        print(format_json(output))
+        return
+
+    if as_markdown:
+        print(format_markdown(output))
         return
 
     style = _VERDICT_STYLE.get(output.verdict, "bold white")

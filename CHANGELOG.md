@@ -6,6 +6,16 @@ Format: `[version] - YYYY-MM-DD` followed by `Added`, `Changed`, `Fixed`, or `Re
 
 ---
 
+## [0.3.0] - 2026-05-28
+
+### Added
+- `--markdown` flag — outputs a clean Markdown review (renders on GitHub, Notion, VS Code, and any text editor)
+- `--output FILE` flag — saves the review to a file; Markdown by default, JSON if `--json` is also set
+- `format_markdown()` and `format_json()` exported from `formatter.py` for programmatic use
+- Markdown output includes date, source label (PR URL, file path, or stdin), emoji-coded severity, and evidence code blocks
+
+---
+
 ## [0.2.0] - 2026-05-27
 
 ### Added
