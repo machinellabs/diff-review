@@ -75,6 +75,13 @@ diff-review path/to/changes.diff
 # Get structured JSON output
 git diff main...HEAD | diff-review --json
 
+# Get Markdown output (renders on GitHub, Notion, VS Code)
+git diff main...HEAD | diff-review --markdown
+
+# Save the review to a file (Markdown by default, JSON if --json is set)
+git diff main...HEAD | diff-review --output review.md
+git diff main...HEAD | diff-review --json --output review.json
+
 # Check version
 diff-review --version
 ```
@@ -97,6 +104,8 @@ medium     src/cache.py    No test for expired entries   Add a test with a froze
 Highlights
   ✓ Clean separation between cache interface and storage backend
   ✓ Good use of type hints throughout
+
+Tokens — reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0254)
 ```
 
 **Verdicts:**
@@ -130,6 +139,30 @@ git diff main...HEAD | diff-review --json
   "highlights": ["Clean separation between cache interface and storage backend"]
 }
 ```
+
+## Markdown output
+
+Use `--markdown` to get clean Markdown output — useful for pasting into GitHub comments, Notion, or saving as a file:
+
+```bash
+git diff main...HEAD | diff-review --markdown
+git diff main...HEAD | diff-review --markdown --output review.md
+diff-review --pr https://github.com/owner/repo/pull/123 --markdown --output review.md
+```
+
+## Token usage
+
+Every terminal run prints a per-phase token breakdown and cost estimate at the bottom:
+
+```
+Tokens — reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0254)
+```
+
+- **reviews** — sum of all parallel per-file Claude calls
+- **synthesis** — the final aggregation call (higher input because it receives all file reviews as context)
+- Cost is estimated using [claude-sonnet-4-6 pricing](https://www.anthropic.com/pricing) ($3/MTok input, $15/MTok output)
+
+Token usage is not included in `--json` or `--markdown` output so those artifacts stay clean for piping and saving.
 
 ## Git aliases
 
