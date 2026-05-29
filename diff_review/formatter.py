@@ -99,3 +99,26 @@ def print_review(output: ReviewOutput, as_json: bool = False, as_markdown: bool 
         console.print("[bold green]Highlights[/bold green]")
         for h in output.highlights:
             console.print(f"  [green]✓[/green] {h}")
+
+
+_INPUT_COST_PER_TOKEN = 3.0 / 1_000_000   # $3 / MTok  (claude-sonnet-4-6)
+_OUTPUT_COST_PER_TOKEN = 15.0 / 1_000_000  # $15 / MTok
+
+
+def print_token_usage(usage: dict) -> None:
+    if not usage:
+        return
+    r_in = usage.get("review_input_tokens", 0)
+    r_out = usage.get("review_output_tokens", 0)
+    s_in = usage.get("synthesis_input_tokens", 0)
+    s_out = usage.get("synthesis_output_tokens", 0)
+    t_in = r_in + s_in
+    t_out = r_out + s_out
+    cost = t_in * _INPUT_COST_PER_TOKEN + t_out * _OUTPUT_COST_PER_TOKEN
+    console.print(
+        f"\n[dim]Tokens — "
+        f"reviews: {r_in:,} in / {r_out:,} out  "
+        f"| synthesis: {s_in:,} in / {s_out:,} out  "
+        f"| total: {t_in:,} in / {t_out:,} out  "
+        f"(~${cost:.4f})[/dim]"
+    )

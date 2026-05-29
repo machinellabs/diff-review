@@ -4,7 +4,7 @@ import sys
 from . import __version__
 from .github import fetch_pr_diff
 from .graph import build_graph
-from .formatter import format_json, format_markdown, print_review
+from .formatter import format_json, format_markdown, print_review, print_token_usage
 
 
 def main() -> None:
@@ -80,6 +80,8 @@ def main() -> None:
     output = result["output"]
 
     print_review(output, as_json=args.json, as_markdown=args.markdown)
+    if not args.json and not args.markdown:
+        print_token_usage(result.get("token_usage", {}))
 
     if args.output:
         content = format_json(output) if args.json else format_markdown(output, source=source_label)

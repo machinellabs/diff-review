@@ -22,3 +22,4 @@ class ReviewState(TypedDict):
     file_chunks: list[str]
     file_reviews: list[str]
     output: ReviewOutput | None
+    token_usage: dict

@@ -62,7 +62,7 @@ def parse_diff(state: ReviewState) -> dict:
     return {"file_chunks": [_truncate_chunk(c) for c in chunks if not _should_skip(c)]}
 
 
-def _review_chunk(chunk: str) -> str:
+def _review_chunk(chunk: str) -> tuple[str, int, int]:
     try:
         response = _client.messages.create(
             model=_MODEL,
@@ -85,7 +85,11 @@ def _review_chunk(chunk: str) -> str:
             raise RuntimeError(
                 f"Incomplete API response for chunk (stop_reason={response.stop_reason!r})"
             )
-        return _extract_json(response.content[0].text)
+        return (
+            _extract_json(response.content[0].text),
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
     except anthropic.APIError as e:
         raise RuntimeError(f"API error while reviewing chunk: {e}") from e
 
@@ -93,10 +97,26 @@ def _review_chunk(chunk: str) -> str:
 def review_chunks(state: ReviewState) -> dict:
     chunks = state["file_chunks"]
     if not chunks:
-        return {"file_reviews": []}
+        return {
+            "file_reviews": [],
+            "token_usage": {
+                "review_input_tokens": 0,
+                "review_output_tokens": 0,
+                "synthesis_input_tokens": 0,
+                "synthesis_output_tokens": 0,
+            },
+        }
     with ThreadPoolExecutor(max_workers=min(len(chunks), 8)) as executor:
-        reviews = list(executor.map(_review_chunk, chunks))
-    return {"file_reviews": reviews}
+        results = list(executor.map(_review_chunk, chunks))
+    return {
+        "file_reviews": [r[0] for r in results],
+        "token_usage": {
+            "review_input_tokens": sum(r[1] for r in results),
+            "review_output_tokens": sum(r[2] for r in results),
+            "synthesis_input_tokens": 0,
+            "synthesis_output_tokens": 0,
+        },
+    }
 
 
 def synthesize(state: ReviewState) -> dict:
@@ -149,4 +169,13 @@ def synthesize(state: ReviewState) -> dict:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Invalid JSON in synthesis response: {e}") from e
 
-    return {"output": ReviewOutput(**data)}
+    prior = state.get("token_usage") or {}
+    return {
+        "output": ReviewOutput(**data),
+        "token_usage": {
+            "review_input_tokens": prior.get("review_input_tokens", 0),
+            "review_output_tokens": prior.get("review_output_tokens", 0),
+            "synthesis_input_tokens": response.usage.input_tokens,
+            "synthesis_output_tokens": response.usage.output_tokens,
+        },
+    }
