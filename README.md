@@ -2,17 +2,18 @@
 
 [![CI](https://github.com/machinellabs/diff-review/actions/workflows/ci.yml/badge.svg)](https://github.com/machinellabs/diff-review/actions/workflows/ci.yml)
 
-An agentic AI code review CLI for local diffs and GitHub pull requests. It uses [LangGraph](https://github.com/langchain-ai/langgraph) to split a review into explicit parse, per-file review, and synthesis steps, then uses the [Claude API](https://www.anthropic.com) to return structured findings with evidence from the diff.
+`diff-review` is a command-line tool that reviews git diffs with Claude. It works with local diffs, saved patch files, and GitHub pull request URLs.
 
-## Why this project matters
+The goal is simple: get a second pass on a change before merging it, with output that is easy to read in the terminal or reuse in another workflow.
 
-`diff-review` is built as a developer workflow tool, not a chatbot wrapper. It demonstrates:
+## What it does
 
-- **Agentic workflow design** - a LangGraph pipeline coordinates parsing, parallel per-file review, and final synthesis.
-- **Structured AI output** - findings are normalized with Pydantic models for CLI, JSON, and Markdown output.
-- **Evidence-first review behavior** - issues include quoted diff evidence so feedback is grounded in the code change.
-- **GitHub integration** - public PRs work without a token; private PRs can use `GITHUB_TOKEN`.
-- **Cost visibility** - terminal output reports per-phase token usage and estimated Claude cost.
+- Reviews staged changes, branch diffs, commits, saved `.diff` files, or GitHub PRs
+- Breaks large diffs into per-file chunks before asking Claude to review them
+- Combines the file-level notes into one final verdict
+- Returns terminal output, JSON, or Markdown
+- Includes file names, severity, suggestions, and quoted evidence from the diff
+- Prints token usage and an estimated cost for each run
 
 ## How it works
 
@@ -24,13 +25,11 @@ flowchart LR
     D --> E[Terminal, JSON, or Markdown output]
 ```
 
-`diff-review` runs a three-step pipeline instead of a single API call:
+Pipeline:
 
-1. **Parse** - splits the diff into per-file chunks
-2. **Review** - sends each file to Claude in parallel, up to 8 at once
-3. **Synthesize** - aggregates all file reviews into a final verdict
-
-This mirrors how a real engineer reviews a PR: read each file carefully, then form an overall opinion.
+1. **Parse** - split the diff into file-level chunks
+2. **Review** - send file chunks to Claude in parallel, up to 8 at a time
+3. **Synthesize** - combine the file reviews into a final verdict
 
 ## Install
 
@@ -42,68 +41,60 @@ pipx install git+https://github.com/machinellabs/diff-review
 
 ## Setup
 
-Get an API key from [console.anthropic.com](https://console.anthropic.com) and export it:
+Get an API key from [console.anthropic.com](https://console.anthropic.com), then export it:
 
 ```bash
 export ANTHROPIC_API_KEY=your-key-here
 ```
 
-Each user runs against their own Anthropic account. Your key is never shared.
-
-Optionally, set a GitHub token to review private repos or avoid rate limits:
+For private GitHub repos, or to avoid public API rate limits, set a GitHub token:
 
 ```bash
-export GITHUB_TOKEN=your-token-here  # optional - public repos work without it
+export GITHUB_TOKEN=your-token-here
 ```
 
 ## Usage
 
-### Review a GitHub PR directly
+### Review a GitHub PR
 
 ```bash
-# Public repo - no token needed
+# Public repo
 diff-review --pr https://github.com/owner/repo/pull/123
 
 # Private repo
 GITHUB_TOKEN=your-token diff-review --pr https://github.com/owner/repo/pull/123
 
-# With JSON output
+# JSON output
 diff-review --pr https://github.com/owner/repo/pull/123 --json
 ```
 
 ### Review local changes
 
 ```bash
-# Review staged changes before committing
+# Staged changes
 git diff --cached | diff-review
 
-# Review all uncommitted changes
+# All uncommitted changes
 git diff HEAD | diff-review
 
-# Review your branch vs main before opening a PR
+# Current branch against main
 git diff main...HEAD | diff-review
 
-# Review the last commit
+# Last commit
 git show HEAD | diff-review
 
-# Review a saved diff file
+# Saved diff file
 diff-review path/to/changes.diff
 
-# Get structured JSON output
-git diff main...HEAD | diff-review --json
-
-# Get Markdown output for GitHub comments, Notion, or saved reports
+# Markdown output
 git diff main...HEAD | diff-review --markdown
 
-# Save the review to a file
+# Save output to a file
 git diff main...HEAD | diff-review --output review.md
 git diff main...HEAD | diff-review --json --output review.json
-
-# Check version
-diff-review --version
 ```
 
-## Output
+## Example output
 
 ```text
 ╭─────────────────╮
@@ -125,17 +116,13 @@ Highlights
 Tokens - reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0254)
 ```
 
-**Verdicts:**
+Verdicts:
 
 - `APPROVE` - looks good to merge
-- `REQUEST_CHANGES` - issues found that should be addressed
-- `NEEDS_DISCUSSION` - not wrong, but warrants a conversation
-
-Each issue includes exact lines from the diff as evidence.
+- `REQUEST_CHANGES` - issues should be addressed first
+- `NEEDS_DISCUSSION` - needs a human call
 
 ## JSON output
-
-Use `--json` to get structured output for scripting or CI:
 
 ```bash
 git diff main...HEAD | diff-review --json
@@ -160,7 +147,7 @@ git diff main...HEAD | diff-review --json
 
 ## Markdown output
 
-Use `--markdown` to get clean Markdown output that can be pasted into GitHub comments, Notion, or saved as a review artifact:
+Markdown output is useful for saving a review or pasting it into a GitHub comment:
 
 ```bash
 git diff main...HEAD | diff-review --markdown
@@ -170,21 +157,15 @@ diff-review --pr https://github.com/owner/repo/pull/123 --markdown --output revi
 
 ## Token usage
 
-Every terminal run prints a per-phase token breakdown and cost estimate at the bottom:
+Every terminal run prints a per-phase token breakdown and cost estimate:
 
 ```text
 Tokens - reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0254)
 ```
 
-- **reviews** - sum of all parallel per-file Claude calls
-- **synthesis** - the final aggregation call, with all file reviews as context
-- Cost is estimated using [Claude pricing](https://www.anthropic.com/pricing)
-
-Token usage is not included in `--json` or `--markdown` output so those artifacts stay clean for piping and saving.
+Token usage is not included in `--json` or `--markdown` output, so saved artifacts stay clean.
 
 ## Git aliases
-
-Add to `~/.gitconfig` for quick access from any repo:
 
 ```ini
 [alias]
@@ -201,7 +182,7 @@ git review-staged
 git review-last
 ```
 
-## CI / GitHub Actions
+## GitHub Actions example
 
 ```yaml
 - name: AI code review
@@ -239,10 +220,10 @@ pytest
 ```text
 diff_review/
 ├── schema.py     # Pydantic output models + LangGraph state
-├── nodes.py      # Three agent steps: parse, review, synthesize
+├── nodes.py      # Parse, review, synthesize steps
 ├── graph.py      # LangGraph workflow wiring
 ├── formatter.py  # Rich terminal display + JSON/Markdown output
-├── github.py     # GitHub API client for fetching PR diffs
+├── github.py     # GitHub API client for PR diffs
 └── cli.py        # Entry point and argument parsing
 ```
 
