@@ -8,7 +8,7 @@ over the network.
 
 import re
 
-from .schema import Issue
+from .schema import Issue, ReviewOutput
 
 SECURITY_RULES = [
     (
@@ -96,8 +96,11 @@ _SECRET_PATTERNS = [
         "high",
     ),
     (
+        # [a-z0-9_]* instead of \b so compound names like DB_PASSWORD,
+        # JWT_SECRET, or GITHUB_DEPLOY_TOKEN match ("_" is a word character,
+        # so \b never fires before the keyword in those names).
         re.compile(
-            r"(?i)\b(api[_-]?key|secret|token|passwd|password)\b\s*[:=]\s*"
+            r"(?i)[a-z0-9_]*(api[_-]?key|secret|token|passwd|password)\b\s*[:=]\s*"
             r"[\"'][^\"']{8,}[\"']"
         ),
         "Possible hardcoded credential assignment",
@@ -175,3 +178,24 @@ def merge_secret_issues(output_issues: list[Issue], found: list[Issue]) -> list[
     existing = {issue.evidence.strip() for issue in output_issues if issue.evidence}
     fresh = [issue for issue in found if issue.evidence.strip() not in existing]
     return fresh + output_issues
+
+
+def scan_only_output(found: list[Issue]) -> ReviewOutput:
+    """Build a review from scanner findings alone.
+
+    Used when every chunk of the diff is skipped (lockfiles, minified assets)
+    so there is nothing for the model to review — the deterministic secrets
+    scan still applies to those files.
+    """
+    if any(issue.severity == "high" for issue in found):
+        verdict = "request_changes"
+    elif found:
+        verdict = "needs_discussion"
+    else:
+        verdict = "approve"
+    detail = "found the issues below." if found else "found nothing."
+    summary = (
+        "Every file in this diff is excluded from model review (lockfiles or "
+        f"minified assets); the local secrets scan {detail}"
+    )
+    return ReviewOutput(verdict=verdict, summary=summary, issues=found, highlights=[])
