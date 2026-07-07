@@ -5,6 +5,7 @@ from . import __version__
 from .github import fetch_pr_diff
 from .graph import build_graph
 from .formatter import format_json, format_markdown, print_review, print_token_usage
+from .security import merge_secret_issues, scan_secrets
 
 
 def main() -> None:
@@ -39,6 +40,11 @@ def main() -> None:
         "--output",
         metavar="FILE",
         help="Save review to a file. Markdown by default; JSON if --json is set.",
+    )
+    parser.add_argument(
+        "--security",
+        action="store_true",
+        help="Security-focused review: injection, secrets, authz, deserialization, and more.",
     )
     parser.add_argument(
         "--version",
@@ -76,8 +82,22 @@ def main() -> None:
         sys.exit(1)
 
     graph = build_graph()
-    result = graph.invoke({"diff": diff, "file_chunks": [], "file_reviews": [], "output": None})
+    result = graph.invoke(
+        {
+            "diff": diff,
+            "file_chunks": [],
+            "file_reviews": [],
+            "output": None,
+            "security": args.security,
+        }
+    )
     output = result["output"]
+
+    if args.security:
+        found = scan_secrets(diff)
+        output.issues = merge_secret_issues(output.issues, found)
+        if output.verdict == "approve" and any(i.severity == "high" for i in found):
+            output.verdict = "request_changes"
 
     print_review(output, as_json=args.json, as_markdown=args.markdown)
     if not args.json and not args.markdown:
