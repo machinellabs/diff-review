@@ -1,0 +1,35 @@
+diff --git a/app/routes/users.py b/app/routes/users.py
+new file mode 100644
+index 0000000..3f1c2aa
+--- /dev/null
++++ b/app/routes/users.py
+@@ -0,0 +1,29 @@
++import sqlite3
++import subprocess
++
++from flask import Flask, request
++
++app = Flask(__name__)
++
++GITHUB_DEPLOY_TOKEN = "ghp_x7K9mQ2vLpR4tW8sNzC5bJfY3hD6aE1gU0oV"
++
++
++@app.get("/users")
++def get_user():
++    user_id = request.args.get("id")
++    conn = sqlite3.connect("app.db")
++    cursor = conn.cursor()
++    cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
++    return {"user": cursor.fetchone()}
++
++
++@app.post("/export")
++def export_report():
++    filename = request.form["filename"]
++    subprocess.run(f"tar -czf /exports/{filename}.tar.gz /data", shell=True)
++    return {"ok": True}
++
++
++def md5_password(password: str) -> str:
++    import hashlib
++    return hashlib.md5(password.encode()).hexdigest()

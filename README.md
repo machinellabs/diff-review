@@ -127,6 +127,12 @@ blocks, credential assignments). Those findings are merged into the review
 deterministically — a committed secret gets flagged even if the model misses
 it, and a high-severity hit blocks an `APPROVE` verdict.
 
+To see it in action, review the intentionally vulnerable example diff:
+
+```bash
+diff-review --security examples/insecure.diff
+```
+
 ### Test
 
 From a development checkout:
