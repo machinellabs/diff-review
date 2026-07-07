@@ -31,67 +31,75 @@ Pipeline:
 2. **Review** - send file chunks to Claude in parallel, up to 8 at a time
 3. **Synthesize** - combine the file reviews into a final verdict
 
-## Install
+## How to run it
+
+### Install
+
+Use `pipx` for a normal install:
 
 ```bash
 pipx install git+https://github.com/machinellabs/diff-review
 ```
 
-> Requires [pipx](https://pipx.pypa.io/stable/installation/). On macOS: `brew install pipx`
+On macOS, install `pipx` with:
 
-## Setup
+```bash
+brew install pipx
+```
 
-Get an API key from [console.anthropic.com](https://console.anthropic.com), then export it:
+For local development:
+
+```bash
+git clone https://github.com/machinellabs/diff-review.git
+cd diff-review
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+### Configure
+
+Set an Anthropic API key before running real reviews:
 
 ```bash
 export ANTHROPIC_API_KEY=your-key-here
 ```
 
-For private GitHub repos, or to avoid public API rate limits, set a GitHub token:
+For private GitHub repos, or to avoid public API rate limits, set a GitHub token too:
 
 ```bash
 export GITHUB_TOKEN=your-token-here
 ```
 
-## Usage
+### Run
 
-### Review a GitHub PR
+Review a GitHub pull request:
 
 ```bash
-# Public repo
 diff-review --pr https://github.com/owner/repo/pull/123
-
-# Private repo
-GITHUB_TOKEN=your-token diff-review --pr https://github.com/owner/repo/pull/123
-
-# JSON output
-diff-review --pr https://github.com/owner/repo/pull/123 --json
 ```
 
-### Review local changes
+Review local changes:
 
 ```bash
-# Staged changes
 git diff --cached | diff-review
-
-# All uncommitted changes
-git diff HEAD | diff-review
-
-# Current branch against main
 git diff main...HEAD | diff-review
-
-# Last commit
 git show HEAD | diff-review
+```
 
-# Saved diff file
-diff-review path/to/changes.diff
+Save Markdown or JSON output:
 
-# Markdown output
-git diff main...HEAD | diff-review --markdown
-
-# Save output to a file
-git diff main...HEAD | diff-review --output review.md
+```bash
+git diff main...HEAD | diff-review --markdown --output review.md
 git diff main...HEAD | diff-review --json --output review.json
+```
+
+### Test
+
+From a development checkout:
+
+```bash
+pytest
 ```
 
 ## Example output
@@ -193,14 +201,7 @@ git review-last
 
 ## Development
 
-```bash
-git clone https://github.com/machinellabs/diff-review.git
-cd diff-review
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
-```
+For local development, use the install-from-source commands above, then run `pytest`.
 
 ## Configuration
 
