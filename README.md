@@ -199,6 +199,10 @@ git review-last
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+This repo reviews its own pull requests with the workflow in
+[`.github/workflows/review.yml`](.github/workflows/review.yml) — the Markdown
+review shows up in the job summary of each PR.
+
 ## Development
 
 For local development, use the install-from-source commands above, then run `pytest`.
@@ -231,3 +235,7 @@ diff_review/
 ## Versioning
 
 This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.md](CHANGELOG.md) for the full history.
+
+## License
+
+[MIT](LICENSE)
