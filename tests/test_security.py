@@ -1,8 +1,10 @@
+from diff_review.nodes import parse_diff
 from diff_review.schema import Issue
 from diff_review.security import (
     SECURITY_RULES,
     merge_secret_issues,
     rules_prompt,
+    scan_only_output,
     scan_secrets,
 )
 
@@ -45,6 +47,17 @@ def test_scan_flags_generic_credential_assignment_as_medium() -> None:
 
     assert len(issues) == 1
     assert issues[0].severity == "medium"
+
+
+def test_scan_matches_credential_keywords_in_compound_names() -> None:
+    for line in (
+        'DB_PASSWORD = "supersecret123"',
+        'JWT_SECRET = "supersecret123"',
+        'GITHUB_DEPLOY_TOKEN = "abcdefghijkl"',
+    ):
+        issues = scan_secrets(make_diff(line))
+        assert len(issues) == 1, line
+        assert issues[0].severity == "medium"
 
 
 def test_scan_ignores_removed_lines_and_context() -> None:
@@ -90,6 +103,37 @@ def test_merge_skips_findings_the_model_already_reported() -> None:
     merged = merge_secret_issues([model_issue], [scanner_issue])
 
     assert merged == [model_issue]
+
+
+def test_scanner_covers_chunks_the_model_review_skips() -> None:
+    # A lockfile-only diff produces no reviewable chunks, but the secrets
+    # scan must still see it.
+    diff = make_diff(
+        '"resolved": "https://ghp_x7K9mQ2vLpR4tW8sNzC5bJfY3hD6aE1gU0oV@registry.npmjs.org/pkg"',
+        path="package-lock.json",
+    )
+
+    assert parse_diff({"diff": diff})["file_chunks"] == []
+    findings = scan_secrets(diff)
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
+
+
+def test_scan_only_output_verdicts() -> None:
+    high = Issue(
+        severity="high",
+        file="package-lock.json",
+        description="GitHub token committed in the diff",
+        suggestion="Rotate it.",
+        evidence="+ghp_...",
+        rule="SEC-SECRET",
+    )
+    medium = high.model_copy(update={"severity": "medium"})
+
+    assert scan_only_output([high]).verdict == "request_changes"
+    assert scan_only_output([medium]).verdict == "needs_discussion"
+    assert scan_only_output([]).verdict == "approve"
+    assert scan_only_output([high]).issues == [high]
 
 
 def test_merge_prepends_new_findings() -> None:
