@@ -2,8 +2,10 @@ import json
 import os
 import anthropic
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 from .schema import ReviewState, ReviewOutput
+from .security import rules_prompt
 
 _client = anthropic.Anthropic()
 _MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
@@ -62,23 +64,47 @@ def parse_diff(state: ReviewState) -> dict:
     return {"file_chunks": [_truncate_chunk(c) for c in chunks if not _should_skip(c)]}
 
 
-def _review_chunk(chunk: str) -> tuple[str, int, int]:
+_REVIEW_JSON_SPEC = (
+    '{\"issues\": [{\"severity\": \"low\"|\"medium\"|\"high\", '
+    '\"file\": \"string\", \"description\": \"string\", \"suggestion\": \"string\", '
+    '\"evidence\": \"exact quote of the lines from the diff that demonstrate the issue\"'
+)
+
+
+def _review_system_prompt(security: bool) -> str:
+    if security:
+        return (
+            "You are a senior application security engineer reviewing a code diff. "
+            "Report only security-relevant findings, judged against this ruleset:\n"
+            f"{rules_prompt()}\n"
+            "Severity reflects exploitability and impact, not code style. "
+            "Respond with a JSON object: "
+            + _REVIEW_JSON_SPEC
+            + ', \"rule\": \"the matching rule ID, e.g. SEC-INJ\"}], '
+            '\"highlights\": [\"string — good security practices you noticed\"]}. '
+            "Report only the top 3 most important issues. "
+            "For each issue you must quote the specific lines from the diff that prove it exists. "
+            "Do not report an issue if you cannot point to specific lines. "
+            "Return valid JSON only, no markdown."
+        )
+    return (
+        "You are a senior software engineer reviewing a code diff. "
+        "Respond with a JSON object: "
+        + _REVIEW_JSON_SPEC
+        + '}], \"highlights\": [\"string\"]}. '
+        "Report only the top 3 most important issues. "
+        "For each issue you must quote the specific lines from the diff that prove it exists. "
+        "Do not report an issue if you cannot point to specific lines. "
+        "Return valid JSON only, no markdown."
+    )
+
+
+def _review_chunk(chunk: str, security: bool = False) -> tuple[str, int, int]:
     try:
         response = _client.messages.create(
             model=_MODEL,
             max_tokens=8192,
-            system=(
-                "You are a senior software engineer reviewing a code diff. "
-                "Respond with a JSON object: "
-                '{\"issues\": [{\"severity\": \"low\"|\"medium\"|\"high\", '
-                '\"file\": \"string\", \"description\": \"string\", \"suggestion\": \"string\", '
-                '\"evidence\": \"exact quote of the lines from the diff that demonstrate the issue\"}], '
-                '\"highlights\": [\"string\"]}. '
-                "Report only the top 3 most important issues. "
-                "For each issue you must quote the specific lines from the diff that prove it exists. "
-                "Do not report an issue if you cannot point to specific lines. "
-                "Return valid JSON only, no markdown."
-            ),
+            system=_review_system_prompt(security),
             messages=[{"role": "user", "content": f"Review this diff:\n\n{chunk}"}],
         )
         if not response.content or response.stop_reason == "max_tokens":
@@ -106,8 +132,9 @@ def review_chunks(state: ReviewState) -> dict:
                 "synthesis_output_tokens": 0,
             },
         }
+    review = partial(_review_chunk, security=state.get("security", False))
     with ThreadPoolExecutor(max_workers=min(len(chunks), 8)) as executor:
-        results = list(executor.map(_review_chunk, chunks))
+        results = list(executor.map(review, chunks))
     return {
         "file_reviews": [r[0] for r in results],
         "token_usage": {
@@ -135,20 +162,39 @@ def synthesize(state: ReviewState) -> dict:
 
     combined = json.dumps(parsed, indent=2)
 
+    security = state.get("security", False)
+    if security:
+        role = (
+            "You are a senior application security engineer writing a final "
+            "security review. Choose request_changes if any finding looks "
+            "exploitable. Preserve each issue's rule ID. "
+        )
+        issue_spec = (
+            '{\"severity\": \"low\"|\"medium\"|\"high\", \"file\": \"string\", '
+            '\"description\": \"string\", \"suggestion\": \"string\", '
+            '\"evidence\": \"exact quote of the lines that demonstrate the issue\", '
+            '\"rule\": \"the rule ID, e.g. SEC-INJ\"}'
+        )
+    else:
+        role = "You are a senior software engineer writing a final code review. "
+        issue_spec = (
+            '{\"severity\": \"low\"|\"medium\"|\"high\", \"file\": \"string\", '
+            '\"description\": \"string\", \"suggestion\": \"string\", '
+            '\"evidence\": \"exact quote of the lines that demonstrate the issue\"}'
+        )
+
     try:
         response = _client.messages.create(
             model=_MODEL,
             max_tokens=8192,
             system=(
-                "You are a senior software engineer writing a final code review. "
-                "Synthesize the individual file reviews into one concise verdict. "
+                role
+                + "Synthesize the individual file reviews into one concise verdict. "
                 "Report only the top issues — do not list every minor finding. "
                 "Respond with a JSON object: "
                 '{\"verdict\": \"approve\"|\"request_changes\"|\"needs_discussion\", '
                 '\"summary\": \"string (2-4 sentences)\", '
-                '\"issues\": [{\"severity\": \"low\"|\"medium\"|\"high\", \"file\": \"string\", '
-                '\"description\": \"string\", \"suggestion\": \"string\", '
-                '\"evidence\": \"exact quote of the lines that demonstrate the issue\"}], '
+                f'\"issues\": [{issue_spec}], '
                 '\"highlights\": [\"string\"]}. '
                 "Limit issues to the 5 most important. "
                 "Only include an issue if the evidence field can be populated with a direct quote from the diff. "

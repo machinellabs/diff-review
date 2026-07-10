@@ -47,7 +47,8 @@ def format_markdown(output: ReviewOutput, source: str = "") -> str:
         lines.append(f"---\n\n## Issues ({len(output.issues)} found)\n")
         for issue in output.issues:
             emoji = _SEVERITY_EMOJI.get(issue.severity, "⚪")
-            lines.append(f"### {emoji} {issue.severity.upper()} — `{issue.file}`\n")
+            rule_tag = f" [{issue.rule}]" if issue.rule else ""
+            lines.append(f"### {emoji} {issue.severity.upper()}{rule_tag} — `{issue.file}`\n")
             lines.append(f"**Issue:** {issue.description}  ")
             lines.append(f"**Suggestion:** {issue.suggestion}  ")
             if issue.evidence:
@@ -77,8 +78,11 @@ def print_review(output: ReviewOutput, as_json: bool = False, as_markdown: bool 
     console.print(f"\n[bold]Summary[/bold]\n{output.summary}\n")
 
     if output.issues:
+        has_rules = any(issue.rule for issue in output.issues)
         table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
         table.add_column("Severity", style="bold", width=10)
+        if has_rules:
+            table.add_column("Rule", width=12)
         table.add_column("File", width=30)
         table.add_column("Issue")
         table.add_column("Suggestion")
@@ -86,13 +90,11 @@ def print_review(output: ReviewOutput, as_json: bool = False, as_markdown: bool 
 
         for issue in output.issues:
             sev_style = _SEVERITY_STYLE.get(issue.severity, "white")
-            table.add_row(
-                f"[{sev_style}]{issue.severity}[/{sev_style}]",
-                issue.file,
-                issue.description,
-                issue.suggestion,
-                issue.evidence,
-            )
+            row = [f"[{sev_style}]{issue.severity}[/{sev_style}]"]
+            if has_rules:
+                row.append(issue.rule)
+            row += [issue.file, issue.description, issue.suggestion, issue.evidence]
+            table.add_row(*row)
         console.print(table)
 
     if output.highlights:

@@ -5,6 +5,8 @@ from . import __version__
 from .github import fetch_pr_diff
 from .graph import build_graph
 from .formatter import format_json, format_markdown, print_review, print_token_usage
+from .nodes import parse_diff
+from .security import merge_secret_issues, scan_only_output, scan_secrets
 
 
 def main() -> None:
@@ -41,6 +43,11 @@ def main() -> None:
         help="Save review to a file. Markdown by default; JSON if --json is set.",
     )
     parser.add_argument(
+        "--security",
+        action="store_true",
+        help="Security-focused review: injection, secrets, authz, deserialization, and more.",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -75,9 +82,30 @@ def main() -> None:
         print("Error: no diff provided.", file=sys.stderr)
         sys.exit(1)
 
-    graph = build_graph()
-    result = graph.invoke({"diff": diff, "file_chunks": [], "file_reviews": [], "output": None})
-    output = result["output"]
+    # The local scan runs before the model review so its findings survive even
+    # when the diff has nothing the model can look at.
+    found = scan_secrets(diff) if args.security else []
+
+    if args.security and not parse_diff({"diff": diff})["file_chunks"]:
+        output = scan_only_output(found)
+        result = {}
+    else:
+        graph = build_graph()
+        result = graph.invoke(
+            {
+                "diff": diff,
+                "file_chunks": [],
+                "file_reviews": [],
+                "output": None,
+                "security": args.security,
+            }
+        )
+        output = result["output"]
+
+        if args.security:
+            output.issues = merge_secret_issues(output.issues, found)
+            if output.verdict == "approve" and any(i.severity == "high" for i in found):
+                output.verdict = "request_changes"
 
     print_review(output, as_json=args.json, as_markdown=args.markdown)
     if not args.json and not args.markdown:

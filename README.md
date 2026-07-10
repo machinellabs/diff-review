@@ -11,6 +11,7 @@ The goal is simple: get a second pass on a change before merging it, with output
 - Reviews staged changes, branch diffs, commits, saved `.diff` files, or GitHub PRs
 - Breaks large diffs into per-file chunks before asking Claude to review them
 - Combines the file-level notes into one final verdict
+- Optional `--security` mode: reviews against a security ruleset and runs a local secrets scan
 - Returns terminal output, JSON, or Markdown
 - Includes file names, severity, suggestions, and quoted evidence from the diff
 - Prints token usage and an estimated cost for each run
@@ -92,6 +93,44 @@ Save Markdown or JSON output:
 ```bash
 git diff main...HEAD | diff-review --markdown --output review.md
 git diff main...HEAD | diff-review --json --output review.json
+```
+
+### Security review mode
+
+`--security` switches the review to an application-security lens:
+
+```bash
+git diff main...HEAD | diff-review --security
+diff-review --pr https://github.com/owner/repo/pull/123 --security
+```
+
+In this mode the reviewer only reports security-relevant findings, judged
+against a fixed ruleset:
+
+| Rule | Focus |
+|------|-------|
+| `SEC-INJ` | SQL, command, and template injection |
+| `SEC-SECRET` | Hardcoded keys, tokens, and passwords |
+| `SEC-AUTHZ` | Weakened permission or ownership checks |
+| `SEC-DESER` | Unsafe deserialization of untrusted data |
+| `SEC-PATH` | Path traversal |
+| `SEC-SSRF` | Server-side request forgery |
+| `SEC-CRYPTO` | Weak hashing, bad modes, disabled TLS checks |
+| `SEC-XSS` | Unescaped output into HTML |
+
+Each issue is tagged with its rule ID in the terminal table, Markdown, and
+JSON output.
+
+Security mode also runs a local regex pre-scan of the added lines for
+committed secrets (AWS keys, GitHub/Slack/Anthropic tokens, private key
+blocks, credential assignments). Those findings are merged into the review
+deterministically — a committed secret gets flagged even if the model misses
+it, and a high-severity hit blocks an `APPROVE` verdict.
+
+To see it in action, review the intentionally vulnerable example diff:
+
+```bash
+diff-review --security examples/insecure.diff
 ```
 
 ### Test

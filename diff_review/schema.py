@@ -8,6 +8,7 @@ class Issue(BaseModel):
     description: str
     suggestion: str
     evidence: str
+    rule: str = ""
 
 
 class ReviewOutput(BaseModel):
@@ -23,3 +24,4 @@ class ReviewState(TypedDict):
     file_reviews: list[str]
     output: ReviewOutput | None
     token_usage: dict
+    security: bool

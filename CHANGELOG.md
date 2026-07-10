@@ -6,6 +6,15 @@ Format: `[version] - YYYY-MM-DD` followed by `Added`, `Changed`, `Fixed`, or `Re
 
 ---
 
+## [0.4.0] - 2026-07-07
+
+### Added
+- `--security` flag — security-focused review mode with a fixed ruleset (injection, secrets, authz, deserialization, path traversal, SSRF, weak crypto, XSS)
+- Local regex pre-scan for committed secrets on added lines; findings merge into the review and a high-severity hit blocks an `approve` verdict
+- `rule` field on issues — rule IDs shown in terminal, Markdown, and JSON output
+
+---
+
 ## [0.3.0] - 2026-05-28
 
 ### Added
