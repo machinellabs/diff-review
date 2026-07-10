@@ -106,8 +106,16 @@ def print_review(output: ReviewOutput, as_json: bool = False, as_markdown: bool 
 _INPUT_COST_PER_TOKEN = 3.0 / 1_000_000   # $3 / MTok  (claude-sonnet-4-6)
 _OUTPUT_COST_PER_TOKEN = 15.0 / 1_000_000  # $15 / MTok
 
+_DEFAULT_PRICING = object()  # sentinel: omitted arg keeps the historical Claude rates
 
-def print_token_usage(usage: dict) -> None:
+
+def print_token_usage(usage: dict, pricing=_DEFAULT_PRICING) -> None:
+    """Print token counts, with a cost estimate when pricing is known.
+
+    ``pricing`` is a provider ``Pricing`` (per-token rates), ``None`` to skip
+    the cost estimate (unknown or local/free models), or omitted for the
+    historical claude-sonnet-4-6 rates.
+    """
     if not usage:
         return
     r_in = usage.get("review_input_tokens", 0)
@@ -116,11 +124,17 @@ def print_token_usage(usage: dict) -> None:
     s_out = usage.get("synthesis_output_tokens", 0)
     t_in = r_in + s_in
     t_out = r_out + s_out
-    cost = t_in * _INPUT_COST_PER_TOKEN + t_out * _OUTPUT_COST_PER_TOKEN
+    if pricing is _DEFAULT_PRICING:
+        cost = t_in * _INPUT_COST_PER_TOKEN + t_out * _OUTPUT_COST_PER_TOKEN
+    elif pricing is None:
+        cost = None
+    else:
+        cost = t_in * pricing.input_per_token + t_out * pricing.output_per_token
+    cost_note = f"  (~${cost:.4f})" if cost is not None else ""
     console.print(
         f"\n[dim]Tokens — "
         f"reviews: {r_in:,} in / {r_out:,} out  "
         f"| synthesis: {s_in:,} in / {s_out:,} out  "
-        f"| total: {t_in:,} in / {t_out:,} out  "
-        f"(~${cost:.4f})[/dim]"
+        f"| total: {t_in:,} in / {t_out:,} out"
+        f"{cost_note}[/dim]"
     )

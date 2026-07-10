@@ -1,14 +1,10 @@
 import json
-import os
-import anthropic
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
+from .providers import get_provider
 from .schema import ReviewState, ReviewOutput
 from .security import rules_prompt
-
-_client = anthropic.Anthropic()
-_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 
 def _extract_json(text: str) -> str:
@@ -99,25 +95,40 @@ def _review_system_prompt(security: bool) -> str:
     )
 
 
-def _review_chunk(chunk: str, security: bool = False) -> tuple[str, int, int]:
+_JSON_RETRY_NUDGE = (
+    "\n\nYour previous response was not valid JSON. Respond with only the "
+    "JSON object — no prose, no markdown fences."
+)
+
+
+def _complete_json(system: str, user: str) -> tuple[str, int, int]:
+    """Run a completion expected to return JSON, retrying once if it doesn't.
+
+    Local models violate the JSON-only instruction more often than Claude, so
+    one malformed response gets a second chance with a stricter nudge. The
+    result is returned either way; callers keep their own malformed-JSON
+    handling. Token counts are summed across attempts.
+    """
+    provider = get_provider()
+    completion = provider.complete(system=system, user=user)
+    text = _extract_json(completion.text)
+    input_tokens = completion.input_tokens
+    output_tokens = completion.output_tokens
     try:
-        response = _client.messages.create(
-            model=_MODEL,
-            max_tokens=8192,
-            system=_review_system_prompt(security),
-            messages=[{"role": "user", "content": f"Review this diff:\n\n{chunk}"}],
-        )
-        if not response.content or response.stop_reason == "max_tokens":
-            raise RuntimeError(
-                f"Incomplete API response for chunk (stop_reason={response.stop_reason!r})"
-            )
-        return (
-            _extract_json(response.content[0].text),
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-        )
-    except anthropic.APIError as e:
-        raise RuntimeError(f"API error while reviewing chunk: {e}") from e
+        json.loads(text)
+    except json.JSONDecodeError:
+        retry = provider.complete(system=system, user=user + _JSON_RETRY_NUDGE)
+        text = _extract_json(retry.text)
+        input_tokens += retry.input_tokens
+        output_tokens += retry.output_tokens
+    return text, input_tokens, output_tokens
+
+
+def _review_chunk(chunk: str, security: bool = False) -> tuple[str, int, int]:
+    return _complete_json(
+        system=_review_system_prompt(security),
+        user=f"Review this diff:\n\n{chunk}",
+    )
 
 
 def review_chunks(state: ReviewState) -> dict:
@@ -183,35 +194,26 @@ def synthesize(state: ReviewState) -> dict:
             '\"evidence\": \"exact quote of the lines that demonstrate the issue\"}'
         )
 
+    text, synthesis_input, synthesis_output = _complete_json(
+        system=(
+            role
+            + "Synthesize the individual file reviews into one concise verdict. "
+            "Report only the top issues — do not list every minor finding. "
+            "Respond with a JSON object: "
+            '{\"verdict\": \"approve\"|\"request_changes\"|\"needs_discussion\", '
+            '\"summary\": \"string (2-4 sentences)\", '
+            f'\"issues\": [{issue_spec}], '
+            '\"highlights\": [\"string\"]}. '
+            "Limit issues to the 5 most important. "
+            "Only include an issue if the evidence field can be populated with a direct quote from the diff. "
+            "Return valid JSON only, no markdown."
+        ),
+        user=f"Synthesize these file reviews:\n\n{combined}",
+    )
+    if not text:
+        raise RuntimeError("Empty response from API during synthesis.")
     try:
-        response = _client.messages.create(
-            model=_MODEL,
-            max_tokens=8192,
-            system=(
-                role
-                + "Synthesize the individual file reviews into one concise verdict. "
-                "Report only the top issues — do not list every minor finding. "
-                "Respond with a JSON object: "
-                '{\"verdict\": \"approve\"|\"request_changes\"|\"needs_discussion\", '
-                '\"summary\": \"string (2-4 sentences)\", '
-                f'\"issues\": [{issue_spec}], '
-                '\"highlights\": [\"string\"]}. '
-                "Limit issues to the 5 most important. "
-                "Only include an issue if the evidence field can be populated with a direct quote from the diff. "
-                "Return valid JSON only, no markdown."
-            ),
-            messages=[{"role": "user", "content": f"Synthesize these file reviews:\n\n{combined}"}],
-        )
-        if not response.content or response.stop_reason == "max_tokens":
-            raise RuntimeError(
-                f"Incomplete API response during synthesis (stop_reason={response.stop_reason!r})"
-            )
-        text = _extract_json(response.content[0].text)
-        if not text:
-            raise RuntimeError("Empty response from API during synthesis.")
         data = json.loads(text)
-    except anthropic.APIError as e:
-        raise RuntimeError(f"API error during synthesis: {e}") from e
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Invalid JSON in synthesis response: {e}") from e
 
@@ -221,7 +223,7 @@ def synthesize(state: ReviewState) -> dict:
         "token_usage": {
             "review_input_tokens": prior.get("review_input_tokens", 0),
             "review_output_tokens": prior.get("review_output_tokens", 0),
-            "synthesis_input_tokens": response.usage.input_tokens,
-            "synthesis_output_tokens": response.usage.output_tokens,
+            "synthesis_input_tokens": synthesis_input,
+            "synthesis_output_tokens": synthesis_output,
         },
     }
