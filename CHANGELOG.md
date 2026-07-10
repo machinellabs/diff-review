@@ -6,6 +6,19 @@ Format: `[version] - YYYY-MM-DD` followed by `Added`, `Changed`, `Fixed`, or `Re
 
 ---
 
+## [0.5.0] - 2026-07-09
+
+### Added
+- `--provider openai` — run reviews against any OpenAI-compatible endpoint: the OpenAI API, or a local server such as Ollama for fully offline reviews
+- `--model` and `--base-url` flags, plus `DIFF_REVIEW_PROVIDER`, `OPENAI_MODEL`, and `OPENAI_BASE_URL` environment variables
+- `openai` optional dependency extra (`pip install 'diff-review[openai]'`)
+- One-shot retry with a stricter instruction when a model returns malformed JSON (local models violate the JSON-only contract more often than hosted APIs)
+
+### Changed
+- Cost estimate in the token summary is now provider-aware and omitted when pricing is unknown (OpenAI-compatible endpoints)
+
+---
+
 ## [0.4.0] - 2026-07-07
 
 ### Added

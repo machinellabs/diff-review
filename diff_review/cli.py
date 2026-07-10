@@ -6,6 +6,7 @@ from .github import fetch_pr_diff
 from .graph import build_graph
 from .formatter import format_json, format_markdown, print_review, print_token_usage
 from .nodes import parse_diff
+from .providers import ProviderError, configure, get_provider, provider_name
 from .security import merge_secret_issues, scan_only_output, scan_secrets
 
 
@@ -48,6 +49,23 @@ def main() -> None:
         help="Security-focused review: injection, secrets, authz, deserialization, and more.",
     )
     parser.add_argument(
+        "--provider",
+        choices=["anthropic", "openai"],
+        help="Model provider (default: anthropic, or DIFF_REVIEW_PROVIDER). "
+        "openai covers the OpenAI API and local OpenAI-compatible servers like Ollama.",
+    )
+    parser.add_argument(
+        "--model",
+        help="Model name. Default for anthropic: claude-sonnet-4-6 (or ANTHROPIC_MODEL); "
+        "required for openai (or set OPENAI_MODEL).",
+    )
+    parser.add_argument(
+        "--base-url",
+        metavar="URL",
+        help="Base URL for the openai provider, e.g. http://localhost:11434/v1 "
+        "for Ollama (or set OPENAI_BASE_URL).",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -58,8 +76,35 @@ def main() -> None:
         print("Error: --pr and a diff file are mutually exclusive.", file=sys.stderr)
         sys.exit(1)
 
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        print("Error: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
+    configure(provider=args.provider, model=args.model, base_url=args.base_url)
+
+    if provider_name() == "anthropic":
+        if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+            print("Error: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
+            sys.exit(1)
+    elif provider_name() == "openai":
+        if not args.model and not os.environ.get("OPENAI_MODEL", "").strip():
+            print(
+                "Error: no model set for the openai provider. "
+                "Pass --model or set OPENAI_MODEL (e.g. qwen3.6:27b for Ollama).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        has_base_url = bool(args.base_url or os.environ.get("OPENAI_BASE_URL", "").strip())
+        if not has_base_url and not os.environ.get("OPENAI_API_KEY", "").strip():
+            print(
+                "Error: OPENAI_API_KEY is not set. Set it, or pass --base-url for a "
+                "local OpenAI-compatible server (e.g. http://localhost:11434/v1).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # Build the provider up front so setup problems (a missing openai extra,
+    # an unknown provider name) exit cleanly instead of raising mid-graph.
+    try:
+        get_provider()
+    except ProviderError as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     source_label = ""
@@ -109,7 +154,8 @@ def main() -> None:
 
     print_review(output, as_json=args.json, as_markdown=args.markdown)
     if not args.json and not args.markdown:
-        print_token_usage(result.get("token_usage", {}))
+        usage = result.get("token_usage", {})
+        print_token_usage(usage, pricing=get_provider().pricing if usage else None)
 
     if args.output:
         content = format_json(output) if args.json else format_markdown(output, source=source_label)

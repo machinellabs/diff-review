@@ -60,7 +60,7 @@ pip install -e ".[dev]"
 
 ### Configure
 
-Set an Anthropic API key before running real reviews:
+The default provider is the Claude API. Set an Anthropic API key before running real reviews:
 
 ```bash
 export ANTHROPIC_API_KEY=your-key-here
@@ -71,6 +71,30 @@ For private GitHub repos, or to avoid public API rate limits, set a GitHub token
 ```bash
 export GITHUB_TOKEN=your-token-here
 ```
+
+### Model providers
+
+Reviews can also run against any OpenAI-compatible endpoint — the OpenAI API
+itself, or a local server such as [Ollama](https://ollama.com/) for fully
+offline, zero-cost reviews:
+
+```bash
+# Local model via Ollama (no API key needed)
+pipx install 'diff-review[openai] @ git+https://github.com/machinellabs/diff-review'
+git diff | diff-review --provider openai --base-url http://localhost:11434/v1 --model qwen3:27b
+
+# OpenAI API
+export OPENAI_API_KEY=your-key-here
+git diff | diff-review --provider openai --model gpt-5
+```
+
+Provider, model, and base URL can also be set once via `DIFF_REVIEW_PROVIDER`,
+`OPENAI_MODEL`, and `OPENAI_BASE_URL` instead of flags. The openai provider
+requires the `openai` extra (`pip install 'diff-review[openai]'`).
+
+Since local models break the JSON-only output contract more often than the
+hosted APIs, any malformed model response is retried once with a stricter
+instruction before the usual error handling applies.
 
 ### Run
 
@@ -204,7 +228,9 @@ diff-review --pr https://github.com/owner/repo/pull/123 --markdown --output revi
 
 ## Token usage
 
-Every terminal run prints a per-phase token breakdown and cost estimate:
+Every terminal run prints a per-phase token breakdown, with a cost estimate
+when the provider's pricing is known (the estimate is omitted for
+OpenAI-compatible endpoints, where pricing varies by model and server):
 
 ```text
 Tokens - reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0254)
@@ -248,22 +274,29 @@ For local development, use the install-from-source commands above, then run `pyt
 
 ## Configuration
 
-| Environment variable | Default             | Description                                   |
-|----------------------|---------------------|-----------------------------------------------|
-| `ANTHROPIC_API_KEY`  | *(required)*        | Anthropic API key                             |
-| `ANTHROPIC_MODEL`    | `claude-sonnet-4-6` | Model to use for review                       |
-| `GITHUB_TOKEN`       | *(optional)*        | GitHub token for private repos or rate limits |
+| Environment variable   | Default             | Description                                                    |
+|------------------------|---------------------|----------------------------------------------------------------|
+| `DIFF_REVIEW_PROVIDER` | `anthropic`         | Model provider: `anthropic` or `openai`                        |
+| `ANTHROPIC_API_KEY`    | *(required)*        | Anthropic API key (anthropic provider)                         |
+| `ANTHROPIC_MODEL`      | `claude-sonnet-4-6` | Model for the anthropic provider                               |
+| `OPENAI_API_KEY`       | *(optional)*        | OpenAI API key; not needed for local servers with a base URL   |
+| `OPENAI_MODEL`         | *(required for openai)* | Model for the openai provider                              |
+| `OPENAI_BASE_URL`      | *(optional)*        | OpenAI-compatible endpoint, e.g. `http://localhost:11434/v1`   |
+| `GITHUB_TOKEN`         | *(optional)*        | GitHub token for private repos or rate limits                  |
+
+The `--provider`, `--model`, and `--base-url` flags override the corresponding variables per run.
 
 ## Requirements
 
 - Python 3.11+
-- `ANTHROPIC_API_KEY` environment variable set for real reviews
+- `ANTHROPIC_API_KEY` set for real reviews (or an OpenAI-compatible endpoint via `--provider openai`)
 
 ## Project structure
 
 ```text
 diff_review/
 ├── schema.py     # Pydantic output models + LangGraph state
+├── providers.py  # Model providers: Anthropic + OpenAI-compatible (Ollama, OpenAI)
 ├── nodes.py      # Parse, review, synthesize steps
 ├── graph.py      # LangGraph workflow wiring
 ├── formatter.py  # Rich terminal display + JSON/Markdown output
