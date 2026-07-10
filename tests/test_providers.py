@@ -101,6 +101,24 @@ def test_get_provider_caches_until_reconfigured(monkeypatch) -> None:
     assert get_provider().model == "other"
 
 
+def test_cli_exits_cleanly_on_provider_setup_error(monkeypatch, capsys) -> None:
+    from diff_review import cli
+
+    def broken_provider():
+        raise ProviderError("The openai package is not installed.")
+
+    monkeypatch.setattr(cli, "get_provider", broken_provider)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["diff-review", "--provider", "openai", "--model", "m", "--base-url", "http://x"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "Error: The openai package is not installed." in err
+
+
 # --- JSON retry ---
 
 

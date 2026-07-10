@@ -6,7 +6,7 @@ from .github import fetch_pr_diff
 from .graph import build_graph
 from .formatter import format_json, format_markdown, print_review, print_token_usage
 from .nodes import parse_diff
-from .providers import configure, get_provider, provider_name
+from .providers import ProviderError, configure, get_provider, provider_name
 from .security import merge_secret_issues, scan_only_output, scan_secrets
 
 
@@ -82,7 +82,7 @@ def main() -> None:
         if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
             print("Error: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
             sys.exit(1)
-    else:
+    elif provider_name() == "openai":
         if not args.model and not os.environ.get("OPENAI_MODEL", "").strip():
             print(
                 "Error: no model set for the openai provider. "
@@ -98,6 +98,14 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+
+    # Build the provider up front so setup problems (a missing openai extra,
+    # an unknown provider name) exit cleanly instead of raising mid-graph.
+    try:
+        get_provider()
+    except ProviderError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     source_label = ""
     if args.pr:
