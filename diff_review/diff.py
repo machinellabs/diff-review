@@ -40,7 +40,43 @@ def file_sections(diff: str) -> list[str]:
     if not starts:
         raise ValueError("No supported git or unified diff found in the input.")
     starts.append(len(lines))
-    return ["".join(lines[a:b]) for a, b in zip(starts, starts[1:])]
+    sections = ["".join(lines[a:b]) for a, b in zip(starts, starts[1:])]
+    for section in sections:
+        _validate_hunks(section)
+    return sections
+
+
+def _validate_hunks(section: str) -> None:
+    """Reject truncated/malformed input before either exclusion or model review."""
+    old_left = new_left = 0
+    had_hunk = False
+    has_content_headers = False
+    previous_was_body = False
+    for line in section.splitlines():
+        match = _HUNK.match(line)
+        if match:
+            if old_left or new_left:
+                raise ValueError(f"Incomplete diff hunk in {file_path(section)}.")
+            old_left = int(match[2]) if match[2] is not None else 1
+            new_left = int(match[4]) if match[4] is not None else 1
+            had_hunk = True
+            previous_was_body = False
+        elif line == "\\ No newline at end of file" and previous_was_body:
+            previous_was_body = False
+        elif old_left or new_left:
+            if not line.startswith((" ", "-", "+")):
+                raise ValueError(f"Malformed diff hunk in {file_path(section)}.")
+            old_left -= int(line.startswith((" ", "-")))
+            new_left -= int(line.startswith((" ", "+")))
+            if old_left < 0 or new_left < 0:
+                raise ValueError(f"Diff hunk line counts do not match in {file_path(section)}.")
+            previous_was_body = True
+        elif line.startswith("@@") or (had_hunk and line):
+            raise ValueError(f"Unexpected content after a diff hunk in {file_path(section)}.")
+        elif line.startswith(("--- ", "+++ ")):
+            has_content_headers = True
+    if old_left or new_left or (has_content_headers and not had_hunk):
+        raise ValueError(f"Incomplete diff hunk in {file_path(section)}.")
 
 
 def _decode_path(value: str, strip_prefix: bool = True) -> str:
@@ -145,7 +181,10 @@ def split_file(section: str) -> list[str]:
             new += 1
         for unit in units:
             if body and not _fits(segment(body + unit)):
-                chunks.append("".join(segment(body)))
+                # A boundary can leave only unchanged context in a segment.
+                # Such a segment is not a patch hunk and needs no model call.
+                if any(line.startswith(("+", "-")) for line in body):
+                    chunks.append("".join(segment(body)))
                 old += sum(line.startswith((" ", "-")) for line in body)
                 new += sum(line.startswith((" ", "+")) for line in body)
                 body = []
@@ -155,7 +194,7 @@ def split_file(section: str) -> list[str]:
                     "split the change before reviewing it."
                 )
             body.extend(unit)
-        if body:
+        if any(line.startswith(("+", "-")) for line in body):
             chunks.append("".join(segment(body)))
     if len(current) > len(header):
         chunks.append("".join(current))

@@ -18,7 +18,7 @@ def make_diff(added_line: str, path: str = "src/config.py") -> str:
         f"diff --git a/{path} b/{path}\n"
         f"--- a/{path}\n"
         f"+++ b/{path}\n"
-        "@@ -1,2 +1,3 @@\n"
+        "@@ -1,1 +1,2 @@\n"
         " unchanged = True\n"
         f"+{added_line}\n"
     )
@@ -88,7 +88,7 @@ def test_scan_ignores_placeholders_and_env_lookups() -> None:
 
 def test_scan_dedupes_identical_lines() -> None:
     line = 'secret = "abcdefghijklmnop"'
-    diff = make_diff(line) + f"+{line}\n"
+    diff = make_diff(line).replace("+1,2", "+1,3") + f"+{line}\n"
 
     assert len(scan_secrets(diff)) == 1
 
@@ -243,3 +243,43 @@ def test_scanner_does_not_downgrade_model_or_hide_different_rule():
     merged = merge_secret_issues([high, injection], [scanned])
     assert merged[0].severity == "high"
     assert injection in merged
+
+
+def test_private_key_state_survives_hunk_boundaries():
+    diff = (
+        "diff --git a/key.pem b/key.pem\n--- a/key.pem\n+++ b/key.pem\n"
+        "@@ -1,1 +1,1 @@\n -----BEGIN PRIVATE KEY-----\n"
+        "@@ -20,1 +20,1 @@\n-OLDSYNTHETICKEYDATA\n+NEWSYNTHETICKEYDATA\n"
+    )
+    safe = redact_secrets(diff)
+    assert "SYNTHETICKEYDATA" not in safe
+    assert "@@ -20,1 +20,1 @@" in safe
+    assert len(safe.splitlines()) == len(diff.splitlines())
+    found = scan_secrets(diff)
+    assert len(found) == 1
+    assert found[0].severity == "high"
+    assert "SYNTHETICKEYDATA" not in found[0].model_dump_json()
+
+
+def test_key_payload_before_end_marker_is_masked():
+    text = "-----BEGIN PRIVATE KEY-----\nBODY-----END PRIVATE KEY-----\nordinary text\n"
+    safe = redact_secrets(text)
+    assert "BODY" not in safe
+    assert "ordinary text" in safe
+
+
+def test_key_redaction_preserves_no_newline_marker(patch_text):
+    from diff_review.nodes import parse_diff
+    diff = patch_text(["+-----BEGIN PRIVATE KEY-----", "+BODY", "\\ No newline at end of file"])
+    assert "BODY" not in redact_secrets(diff)
+    assert "\\ No newline at end of file" in redact_secrets(diff)
+    assert parse_diff({"diff": diff})["file_chunks"]
+
+
+def test_masked_evidence_collisions_cannot_downgrade_scanner_findings(patch_text):
+    diff = patch_text([f'+token = "{KEY}"', '+token = "supersecret123"'])
+    found = scan_secrets(diff)
+    assert [issue.severity for issue in found] == ["high", "medium"]
+    merged = merge_secret_issues([], found)
+    assert merged[0].severity == "high"
+    assert scan_only_output(merged).verdict == "request_changes"

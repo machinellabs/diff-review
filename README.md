@@ -152,6 +152,9 @@ pytest
 Tests mock model requests and need no API key. `requirements-dev.lock` pins
 the development/CI environment across Python 3.11–3.14. Refresh it deliberately
 with `uv pip compile --universal --python-version 3.11 --extra dev pyproject.toml -o requirements-dev.lock`.
+Integration tests run the installed CLI and real Anthropic SDK against a local
+HTTP server with dummy credentials. Patch stress tests reconstruct randomized
+changes with `git apply`; Git must be available when running the tests.
 
 ## Review coverage and failures
 
@@ -169,6 +172,9 @@ with file headers and updated hunk ranges. Oversized individual lines fail
 explicitly. Combined file-review JSON is limited to 100,000 bytes for synthesis;
 larger results require reviewing a smaller diff. No changed lines are silently
 truncated to meet these limits.
+Malformed or truncated input hunks are rejected before review, even for files
+that would otherwise be excluded. Context-only fragments created by splitting
+are omitted; every added and removed line is retained.
 
 Each model response is validated, including verdict/severity values, file paths,
 and evidence quotes. Invalid or incomplete responses get one additional attempt.

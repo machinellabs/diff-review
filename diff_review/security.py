@@ -106,9 +106,11 @@ def redact_secrets(text: str) -> str:
     result = []
     in_private_key = False
     for line in text.splitlines(keepends=True):
-        # A truncated PEM block must not swallow later patch headers.
-        if line.startswith(("diff --git ", "@@", "--- ", "+++ ")):
+        # Keep key state across hunks, which may omit the END marker. Preserve
+        # structural headers while conservatively masking subsequent payloads.
+        if line.startswith("diff --git "):
             in_private_key = False
+        structural = line.startswith(("@@", "--- ", "+++ ", "\\ No newline at end of file"))
         begin = _PRIVATE_KEY.search(line)
         end = _PRIVATE_KEY_END.search(line)
         if begin:
@@ -117,9 +119,12 @@ def redact_secrets(text: str) -> str:
                 line = line[:begin.end()] + "[REDACTED]" + line[end.start():]
             elif line[begin.end():].strip():
                 line = line[:begin.end()] + "[REDACTED]" + ("\n" if line.endswith("\n") else "")
-        elif _PRIVATE_KEY_END.search(line):
+        elif end:
+            if in_private_key:
+                prefix = line[0] if line.startswith(("+", "-", " ")) else ""
+                line = prefix + "[REDACTED]" + line[end.start():]
             in_private_key = False
-        elif in_private_key:
+        elif in_private_key and not structural:
             prefix = line[0] if line.startswith(("+", "-", " ")) else ""
             line = prefix + "[REDACTED]" + ("\n" if line.endswith("\n") else "")
         spans = sorted({span for span, _, _ in _credential_matches(line)})
@@ -157,15 +162,26 @@ def scan_secrets(diff: str) -> list[Issue]:
     for section in file_sections(diff):
         path = file_path(section)
         in_hunk = False
-        for line in section.splitlines():
+        in_private_key = False
+        safe_lines = redact_secrets(section).splitlines()
+        for index, line in enumerate(section.splitlines()):
             if line.startswith("@@"):
                 in_hunk = True
                 continue
-            if not in_hunk or not line.startswith("+"):
+            if not in_hunk:
+                continue
+            begin = _PRIVATE_KEY.search(line)
+            end = _PRIVATE_KEY_END.search(line)
+            private_material = in_private_key or bool(begin)
+            if begin:
+                in_private_key = True
+            if end:
+                in_private_key = False
+            if not line.startswith("+"):
                 continue
             added = line[1:]
             matches = list(_credential_matches(added))
-            if _PRIVATE_KEY.search(added):
+            if private_material:
                 description, severity = "Private key material committed in the diff", "high"
             elif matches:
                 _, description, severity = matches[0]
@@ -178,14 +194,19 @@ def scan_secrets(diff: str) -> list[Issue]:
             issues.append(Issue(
                 severity=severity, file=path, description=description,
                 suggestion="Remove and rotate the credential; load it from a secrets manager or the environment.",
-                evidence=redact_secrets(line.strip()), rule="SEC-SECRET",
+                evidence=safe_lines[index].strip(), rule="SEC-SECRET",
             ))
     return issues
 
 
 def merge_secret_issues(output_issues: list[Issue], found: list[Issue]) -> list[Issue]:
     """Scanner findings take precedence; never dedupe across different files."""
-    scanned = {(issue.file, issue.evidence.strip()): issue for issue in found}
+    scanned = {}
+    rank = {"low": 0, "medium": 1, "high": 2}
+    for issue in found:
+        key = (issue.file, issue.evidence.strip())
+        if key not in scanned or rank[issue.severity] > rank[scanned[key].severity]:
+            scanned[key] = issue
     remaining = []
     for issue in output_issues:
         key = (issue.file, issue.evidence.strip())

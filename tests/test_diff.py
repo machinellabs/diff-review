@@ -131,3 +131,53 @@ def test_split_ranges_can_reconstruct_a_real_git_patch(tmp_path):
 def test_mixed_combined_diff_cannot_be_silently_ignored(patch_text):
     with pytest.raises(ValueError, match="Combined merge diffs"):
         parse_diff({"diff": patch_text() + "diff --cc merge.py\n@@@ -1 -1 +1 @@@\n"})
+
+
+@pytest.mark.parametrize("path", ["app.py", "poetry.lock"])
+@pytest.mark.parametrize("hunk", [
+    "@@ -0,0 +1,50 @@\n+only_one_line\n",
+    "@@ -0,0 +1,1 @@\n+first\n+extra\n",
+    "@@ -1,2 +1,2 @@\n one\n@@ -20,1 +20,1 @@\n two\n",
+    "@@ malformed header\n+added\n",
+    "@@ -0,0 +1,1 @@\nmissing-plus-prefix\n",
+    "",
+])
+def test_truncated_or_malformed_git_patches_are_rejected_before_exclusion(path, hunk):
+    diff = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n" + hunk
+    with pytest.raises(ValueError):
+        parse_diff({"diff": diff})
+
+
+def test_shipped_examples_parse_completely():
+    from pathlib import Path
+    for path in (Path(__file__).parents[1] / "examples").glob("*.diff"):
+        parsed = parse_diff({"diff": path.read_text()})
+        assert parsed["file_chunks"]
+        assert not parsed["skipped_files"]
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_randomized_chunk_boundaries_preserve_git_patch_semantics(seed, tmp_path, monkeypatch):
+    import difflib
+    import random
+    import subprocess
+    from diff_review import diff as parser
+
+    rng = random.Random(seed)
+    before = [f"original line {i}\n" for i in range(350)]
+    after = before.copy()
+    for change in range(12):
+        at = rng.randrange(len(after) + 1)
+        remove = rng.randrange(0, 50)
+        added = [f"new {seed}:{change}:{i}\n" for i in range(rng.randrange(0, 70))]
+        after[at:at + remove] = added
+    raw = "".join(difflib.unified_diff(before, after, fromfile="a/app.txt", tofile="b/app.txt"))
+    monkeypatch.setattr(parser, "MAX_CHUNK_LINES", 40)
+    chunks = parse_diff({"diff": raw})["file_chunks"]
+    reconstructed = chunks[0] + "".join(chunk[chunk.index("@@ "):] for chunk in chunks[1:])
+    (tmp_path / "app.txt").write_text("".join(before))
+    result = subprocess.run(["git", "apply", "--unidiff-zero", "-"], input=reconstructed,
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "app.txt").read_text() == "".join(after)
+    assert all(len(chunk.splitlines()) <= 40 for chunk in chunks)

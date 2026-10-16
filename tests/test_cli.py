@@ -111,3 +111,35 @@ def test_malformed_model_response_does_not_produce_review(monkeypatch, capsys, p
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "after two attempts" in captured.err
+
+
+def test_output_write_failure_has_no_success_output(monkeypatch, capsys, patch_text, fake_model, tmp_path):
+    fake_model()
+    with pytest.raises(SystemExit) as exc:
+        invoke(monkeypatch, patch_text(), "--json", "--output", str(tmp_path / "missing" / "review.json"))
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "No such file" in captured.err
+
+
+def test_pr_input_success_records_source(monkeypatch, capsys, patch_text, fake_model, tmp_path):
+    fake_model()
+    url = "https://github.com/test/repo/pull/1"
+    fetched = []
+    def fetch(value):
+        fetched.append(value)
+        return patch_text()
+    monkeypatch.setattr(cli, "fetch_pr_diff", fetch)
+    target = tmp_path / "review.md"
+    invoke(monkeypatch, "", "--pr", url, "--markdown", "--output", str(target))
+    assert fetched == [url]
+    assert "**Source:** " + url in target.read_text()
+    assert "APPROVE" in capsys.readouterr().out
+
+
+def test_file_and_pr_are_mutually_exclusive(monkeypatch, capsys):
+    with pytest.raises(SystemExit) as exc:
+        invoke(monkeypatch, "", "file.diff", "--pr", "https://github.com/test/repo/pull/1")
+    assert exc.value.code == 1
+    assert "mutually exclusive" in capsys.readouterr().err
