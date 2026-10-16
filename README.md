@@ -9,9 +9,9 @@ The goal is simple: get a second pass on a change before merging it, with output
 ## What it does
 
 - Reviews staged changes, branch diffs, commits, saved `.diff` files, or GitHub PRs
-- Breaks large diffs into per-file chunks before asking Claude to review them
+- Splits large diffs at hunk boundaries, dividing oversized hunks without dropping changed lines
 - Combines the file-level notes into one final verdict
-- Optional `--security` mode: reviews against a security ruleset and runs a local secrets scan
+- Local secrets scan and credential masking in every mode; optional `--security` focuses the model on a security ruleset
 - Returns terminal output, JSON, or Markdown
 - Includes file names, severity, suggestions, and quoted evidence from the diff
 - Prints token usage and an estimated cost for each run
@@ -55,7 +55,7 @@ git clone https://github.com/machinellabs/diff-review.git
 cd diff-review
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -c requirements-dev.lock -e ".[dev]"
 ```
 
 ### Configure
@@ -121,11 +121,19 @@ against a fixed ruleset:
 Each issue is tagged with its rule ID in the terminal table, Markdown, and
 JSON output.
 
-Security mode also runs a local regex pre-scan of the added lines for
+Every review runs a local regex pre-scan of the added lines for
 committed secrets (AWS keys, GitHub/Slack/Anthropic tokens, private key
 blocks, credential assignments). Those findings are merged into the review
-deterministically — a committed secret gets flagged even if the model misses
-it, and a high-severity hit blocks an `APPROVE` verdict.
+deterministically. A detected high-severity credential produces `REQUEST_CHANGES`,
+and a possible credential prevents an `APPROVE` verdict even if the model misses it.
+
+Recognized credentials are replaced with `[REDACTED]` before sending the diff
+to Claude and in report output, including private-key bodies. The scanner
+checks placeholder **values**, so comments and environment-variable fallbacks
+do not suppress token detection. Redaction is pattern-based and can miss
+unrecognized secrets. Review content still goes to the configured Anthropic
+service; inspect sensitive changes before using a remote review. There is no
+raw-credential bypass flag.
 
 To see it in action, review the intentionally vulnerable example diff:
 
@@ -140,6 +148,46 @@ From a development checkout:
 ```bash
 pytest
 ```
+
+Tests mock model requests and need no API key. `requirements-dev.lock` pins
+the development/CI environment across Python 3.11–3.14. Refresh it deliberately
+with `uv pip compile --universal --python-version 3.11 --extra dev pyproject.toml -o requirements-dev.lock`.
+
+## Review coverage and failures
+
+Reports include a `coverage` object in JSON and a coverage section in terminal
+and Markdown output. It lists reviewed files, excluded files, and the number
+of reviewed chunks. Lockfiles, minified assets, and binary patches are excluded
+from model review. Exclusion matching uses exact basenames or suffixes.
+
+An excluded file makes coverage incomplete: the verdict cannot be `APPROVE`.
+If every file is excluded, the local secrets scan still runs without an API
+key and returns `NEEDS_DISCUSSION` or `REQUEST_CHANGES`.
+
+Large files are split into chunks of at most 300 lines and 24,000 UTF-8 bytes,
+with file headers and updated hunk ranges. Oversized individual lines fail
+explicitly. Combined file-review JSON is limited to 100,000 bytes for synthesis;
+larger results require reviewing a smaller diff. No changed lines are silently
+truncated to meet these limits.
+
+Each model response is validated, including verdict/severity values, file paths,
+and evidence quotes. Invalid or incomplete responses get one additional attempt.
+A persistent failure stops the run without a verdict; file reviews are never
+silently dropped. Verified high-severity findings survive synthesis. Complete
+coverage means every eligible chunk was processed, not that the model found
+every possible bug.
+
+For CI gating:
+
+```bash
+git diff main...HEAD | diff-review --json --fail-on non-approval
+```
+
+`--fail-on request_changes` rejects that verdict only; `--fail-on non-approval`
+also rejects `NEEDS_DISCUSSION`, including incomplete coverage. Reports are
+written before a policy failure exits. The default `--fail-on never` retains
+advisory behavior. Exit codes: `0` completed/advisory, `1` operational failure,
+`2` verdict-policy failure or invalid CLI arguments, `130` cancellation.
 
 ## Example output
 
@@ -265,6 +313,8 @@ For local development, use the install-from-source commands above, then run `pyt
 diff_review/
 ├── schema.py     # Pydantic output models + LangGraph state
 ├── nodes.py      # Parse, review, synthesize steps
+├── diff.py       # File paths, exclusions, and complete hunk splitting
+├── security.py   # Local credential detection and redaction
 ├── graph.py      # LangGraph workflow wiring
 ├── formatter.py  # Rich terminal display + JSON/Markdown output
 ├── github.py     # GitHub API client for PR diffs

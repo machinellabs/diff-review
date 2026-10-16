@@ -31,7 +31,7 @@ def fetch_pr_diff(url: str) -> str:
     try:
         response = httpx.get(api_url, headers=headers, follow_redirects=True, timeout=15)
     except httpx.RequestError as e:
-        raise RuntimeError(f"Network error fetching PR diff: {e}") from e
+        raise RuntimeError("Network error fetching PR diff.") from e
 
     if response.status_code == 401:
         raise RuntimeError("GitHub authentication failed. Check your GITHUB_TOKEN.")
@@ -45,7 +45,8 @@ def fetch_pr_diff(url: str) -> str:
             f"PR not found: {url}\n"
             "Check the URL is correct. For private repos, set GITHUB_TOKEN."
         )
-    response.raise_for_status()
+    if response.is_error:
+        raise RuntimeError(f"GitHub returned HTTP {response.status_code} while fetching the PR diff.")
 
     diff = response.text
     if not diff.strip():

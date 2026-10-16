@@ -1,11 +1,15 @@
+import pytest
+
 from diff_review.nodes import parse_diff
-from diff_review.schema import Issue
+from diff_review.schema import Issue, ReviewOutput
 from diff_review.security import (
     SECURITY_RULES,
     merge_secret_issues,
     rules_prompt,
     scan_only_output,
     scan_secrets,
+    redact_secrets,
+    redact_output,
 )
 
 
@@ -102,7 +106,7 @@ def test_merge_skips_findings_the_model_already_reported() -> None:
 
     merged = merge_secret_issues([model_issue], [scanner_issue])
 
-    assert merged == [model_issue]
+    assert merged == [scanner_issue]
 
 
 def test_scanner_covers_chunks_the_model_review_skips() -> None:
@@ -132,7 +136,7 @@ def test_scan_only_output_verdicts() -> None:
 
     assert scan_only_output([high]).verdict == "request_changes"
     assert scan_only_output([medium]).verdict == "needs_discussion"
-    assert scan_only_output([]).verdict == "approve"
+    assert scan_only_output([]).verdict == "needs_discussion"
     assert scan_only_output([high]).issues == [high]
 
 
@@ -156,3 +160,86 @@ def test_merge_prepends_new_findings() -> None:
     merged = merge_secret_issues([model_issue], [scanner_issue])
 
     assert merged == [scanner_issue, model_issue]
+
+
+# Regression cases from the repository audit. These are synthetic credentials.
+KEY = "AKIA" + "Q7M2" * 4
+
+
+@pytest.mark.parametrize("line", [
+    f'aws_id = "{KEY}" # example integration',
+    f'<input value="{KEY}">',
+    f'aws_id = os.environ.get("AWS_ID", "{KEY}")',
+    f'aws_id = "{KEY}" # xxx placeholder',
+    '"password": "supersecret123"',
+    "'DB_PASSWORD': 'supersecret123'",
+    'password = "myexamplepass123"',
+])
+def test_surrounding_syntax_does_not_hide_credentials(line):
+    found = scan_secrets(make_diff(line))
+    assert found
+    assert KEY not in found[0].evidence
+    assert "supersecret123" not in found[0].evidence
+    assert "[REDACTED]" in found[0].evidence
+
+
+@pytest.mark.parametrize("line", [
+    'password = "your-password"', 'password = "<fill-me-in>"',
+    'password = "placeholder"', 'password = "${PASSWORD}"',
+    'password = "[REDACTED]"',
+])
+def test_only_placeholder_values_are_ignored(line):
+    assert scan_secrets(make_diff(line)) == []
+
+
+def test_redaction_covers_context_removed_lines_and_multiple_values():
+    diff = make_diff(f'key = "{KEY}"; password = "supersecret123"')
+    diff += f'-old = "{KEY}"\n kept = "{KEY}"\n'
+    safe = redact_secrets(diff)
+    assert KEY not in safe
+    assert "supersecret123" not in safe
+    assert redact_secrets(safe) == safe
+    assert "+++ b/src/config.py" in safe
+
+
+def test_private_key_body_is_redacted_and_patch_structure_preserved():
+    diff = make_diff("-----BEGIN RSA PRIVATE KEY-----")
+    diff += "+SYNTHETICKEYMATERIAL\n+-----END RSA PRIVATE KEY-----\n+safe = 1\n"
+    safe = redact_secrets(diff)
+    assert "SYNTHETICKEYMATERIAL" not in safe
+    assert "+[REDACTED]" in safe
+    assert "+safe = 1" in safe
+    assert len(diff.splitlines()) == len(safe.splitlines())
+    assert "PRIVATE KEY" in safe
+
+
+def test_inline_private_key_is_redacted():
+    text = r'key = "-----BEGIN PRIVATE KEY-----\nSYNTHETICKEYMATERIAL\n-----END PRIVATE KEY-----"'
+    assert "SYNTHETICKEYMATERIAL" not in redact_secrets(text)
+
+
+def test_output_redacts_summary_suggestions_and_highlights():
+    output = ReviewOutput(verdict="request_changes", summary=f"Found {KEY}", issues=[], highlights=[f"{KEY}"])
+    assert KEY not in redact_output(output).model_dump_json()
+
+
+def test_merge_keeps_separate_files_and_scanner_severity():
+    first = scan_secrets(make_diff(f'aws_id = "{KEY}"'))[0]
+    second = first.model_copy(update={"file": "other.py"})
+    downgraded = first.model_copy(update={"severity": "low", "rule": ""})
+    merged = merge_secret_issues([downgraded, second], [first])
+    assert merged == [first, second]
+
+
+def test_scanner_understands_quoted_paths():
+    diff = make_diff(f'aws_id = "{KEY}"').replace("+++ b/src/config.py", '+++ "b/folder/config file.py"')
+    assert scan_secrets(diff)[0].file == "folder/config file.py"
+
+
+def test_scanner_does_not_downgrade_model_or_hide_different_rule():
+    scanned = scan_secrets(make_diff('password = "supersecret123"'))[0]
+    high = scanned.model_copy(update={"severity": "high", "description": "Privileged credential"})
+    injection = scanned.model_copy(update={"rule": "SEC-INJ", "description": "Injection on same line"})
+    merged = merge_secret_issues([high, injection], [scanned])
+    assert merged[0].severity == "high"
+    assert injection in merged

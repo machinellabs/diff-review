@@ -8,7 +8,8 @@ over the network.
 
 import re
 
-from .schema import Issue, ReviewOutput
+from .diff import file_path, file_sections
+from .schema import Coverage, Issue, ReviewOutput
 
 SECURITY_RULES = [
     (
@@ -68,134 +69,138 @@ def rules_prompt() -> str:
     )
 
 
-# (pattern, description, severity) — applied to added lines only.
+# Strong signatures are never suppressed by surrounding comments or syntax.
 _SECRET_PATTERNS = [
-    (
-        re.compile(r"AKIA[0-9A-Z]{16}"),
-        "AWS access key ID committed in the diff",
-        "high",
-    ),
-    (
-        re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
-        "Private key material committed in the diff",
-        "high",
-    ),
-    (
-        re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}"),
-        "GitHub token committed in the diff",
-        "high",
-    ),
-    (
-        re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),
-        "Slack token committed in the diff",
-        "high",
-    ),
-    (
-        re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"),
-        "Anthropic API key committed in the diff",
-        "high",
-    ),
-    (
-        # [a-z0-9_]* instead of \b so compound names like DB_PASSWORD,
-        # JWT_SECRET, or GITHUB_DEPLOY_TOKEN match ("_" is a word character,
-        # so \b never fires before the keyword in those names).
-        re.compile(
-            r"(?i)[a-z0-9_]*(api[_-]?key|secret|token|passwd|password)\b\s*[:=]\s*"
-            r"[\"'][^\"']{8,}[\"']"
-        ),
-        "Possible hardcoded credential assignment",
-        "medium",
-    ),
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS access key ID committed in the diff"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}"), "GitHub token committed in the diff"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "GitHub token committed in the diff"),
+    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "Slack token committed in the diff"),
+    (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"), "Anthropic API key committed in the diff"),
 ]
-
-# Values that look like docs or config plumbing, not real secrets.
-_PLACEHOLDER_MARKERS = (
-    "example",
-    "your-",
-    "your_",
-    "placeholder",
-    "changeme",
-    "xxx",
-    "<",
-    "${",
-    "os.environ",
-    "process.env",
-    "getenv",
-    "secrets.",
+_PRIVATE_KEY = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----")
+_PRIVATE_KEY_END = re.compile(r"-----END (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----")
+_ASSIGNMENT = re.compile(
+    r'''(?i)[a-z0-9_-]*(?:api[_-]?key|secret|token|passwd|password)\b["']?\s*[:=]\s*'''
+    r'''(?P<quote>["'])(?P<value>[^"'\r\n]{8,})(?P=quote)'''
+)
+_PLACEHOLDER = re.compile(
+    r"(?i)(?:your[-_].*|<[^>]+>|\$\{[^}]+\}|example|placeholder|changeme|x{3,}|\[REDACTED\])"
 )
 
 
-def _is_placeholder(line: str) -> bool:
-    lowered = line.lower()
-    return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
+def _credential_matches(line: str):
+    for pattern, description in _SECRET_PATTERNS:
+        for match in pattern.finditer(line):
+            yield match.span(), description, "high"
+    for match in _ASSIGNMENT.finditer(line):
+        if not _PLACEHOLDER.fullmatch(match["value"]):
+            yield match.span("value"), "Possible hardcoded credential assignment", "medium"
+
+
+def redact_secrets(text: str) -> str:
+    """Mask recognized values, including removed/context lines and PEM bodies.
+
+    This is best-effort pattern detection, not a guarantee that arbitrary
+    sensitive data can safely be shared with a remote model.
+    """
+    result = []
+    in_private_key = False
+    for line in text.splitlines(keepends=True):
+        # A truncated PEM block must not swallow later patch headers.
+        if line.startswith(("diff --git ", "@@", "--- ", "+++ ")):
+            in_private_key = False
+        begin = _PRIVATE_KEY.search(line)
+        end = _PRIVATE_KEY_END.search(line)
+        if begin:
+            in_private_key = end is None
+            if end and end.start() >= begin.end():
+                line = line[:begin.end()] + "[REDACTED]" + line[end.start():]
+            elif line[begin.end():].strip():
+                line = line[:begin.end()] + "[REDACTED]" + ("\n" if line.endswith("\n") else "")
+        elif _PRIVATE_KEY_END.search(line):
+            in_private_key = False
+        elif in_private_key:
+            prefix = line[0] if line.startswith(("+", "-", " ")) else ""
+            line = prefix + "[REDACTED]" + ("\n" if line.endswith("\n") else "")
+        spans = sorted({span for span, _, _ in _credential_matches(line)})
+        # Merge overlaps before replacing, so a token inside an assignment is
+        # redacted once without invalidating offsets for another credential.
+        merged: list[tuple[int, int]] = []
+        for start, end in spans:
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+            else:
+                merged.append((start, end))
+        for start, end in reversed(merged):
+            line = line[:start] + "[REDACTED]" + line[end:]
+        result.append(line)
+    return "".join(result)
+
+
+def redact_output(output: ReviewOutput) -> ReviewOutput:
+    """Sanitize every string, including model summaries and suggestions."""
+    def clean(value):
+        if isinstance(value, str):
+            return redact_secrets(value)
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        if isinstance(value, dict):
+            return {key: clean(item) for key, item in value.items()}
+        return value
+    return ReviewOutput.model_validate(clean(output.model_dump()))
 
 
 def scan_secrets(diff: str) -> list[Issue]:
-    """Scan the added lines of a diff for secrets. Returns one Issue per hit."""
+    """Scan added hunk lines; findings contain masked evidence only."""
     issues: list[Issue] = []
     seen: set[tuple[str, str]] = set()
-    current_file = "unknown"
-
-    for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            current_file = line[6:].strip()
-            continue
-        if not line.startswith("+") or line.startswith("+++"):
-            continue
-
-        added = line[1:]
-        if _is_placeholder(added):
-            continue
-
-        for pattern, description, severity in _SECRET_PATTERNS:
-            if not pattern.search(added):
+    for section in file_sections(diff):
+        path = file_path(section)
+        in_hunk = False
+        for line in section.splitlines():
+            if line.startswith("@@"):
+                in_hunk = True
                 continue
-            key = (current_file, added.strip())
+            if not in_hunk or not line.startswith("+"):
+                continue
+            added = line[1:]
+            matches = list(_credential_matches(added))
+            if _PRIVATE_KEY.search(added):
+                description, severity = "Private key material committed in the diff", "high"
+            elif matches:
+                _, description, severity = matches[0]
+            else:
+                continue
+            key = (path, added.strip())
             if key in seen:
                 continue
             seen.add(key)
-            issues.append(
-                Issue(
-                    severity=severity,
-                    file=current_file,
-                    description=description,
-                    suggestion=(
-                        "Remove the value from the diff, rotate the "
-                        "credential, and load it from the environment or a "
-                        "secrets manager."
-                    ),
-                    evidence=line.strip(),
-                    rule="SEC-SECRET",
-                )
-            )
-            break
-
+            issues.append(Issue(
+                severity=severity, file=path, description=description,
+                suggestion="Remove and rotate the credential; load it from a secrets manager or the environment.",
+                evidence=redact_secrets(line.strip()), rule="SEC-SECRET",
+            ))
     return issues
 
 
 def merge_secret_issues(output_issues: list[Issue], found: list[Issue]) -> list[Issue]:
-    """Prepend scanner findings, skipping any the model already reported."""
-    existing = {issue.evidence.strip() for issue in output_issues if issue.evidence}
-    fresh = [issue for issue in found if issue.evidence.strip() not in existing]
-    return fresh + output_issues
+    """Scanner findings take precedence; never dedupe across different files."""
+    scanned = {(issue.file, issue.evidence.strip()): issue for issue in found}
+    remaining = []
+    for issue in output_issues:
+        key = (issue.file, issue.evidence.strip())
+        if key not in scanned or issue.rule not in ("", "SEC-SECRET"):
+            remaining.append(issue)
+        elif issue.severity == "high" and scanned[key].severity != "high":
+            # A generic assignment match must not downgrade model evidence.
+            scanned[key] = issue.model_copy(update={"rule": "SEC-SECRET"})
+    return list(scanned.values()) + remaining
 
 
-def scan_only_output(found: list[Issue]) -> ReviewOutput:
-    """Build a review from scanner findings alone.
-
-    Used when every chunk of the diff is skipped (lockfiles, minified assets)
-    so there is nothing for the model to review — the deterministic secrets
-    scan still applies to those files.
-    """
-    if any(issue.severity == "high" for issue in found):
-        verdict = "request_changes"
-    elif found:
-        verdict = "needs_discussion"
-    else:
-        verdict = "approve"
-    detail = "found the issues below." if found else "found nothing."
-    summary = (
-        "Every file in this diff is excluded from model review (lockfiles or "
-        f"minified assets); the local secrets scan {detail}"
+def scan_only_output(found: list[Issue], skipped_files: list[str] | None = None) -> ReviewOutput:
+    return ReviewOutput(
+        verdict="request_changes" if any(i.severity == "high" for i in found) else "needs_discussion",
+        summary="No files received model review. Only a local secrets scan was completed; this is not an approval.",
+        issues=found, highlights=[],
+        coverage=Coverage(skipped_files=skipped_files or []),
     )
-    return ReviewOutput(verdict=verdict, summary=summary, issues=found, highlights=[])

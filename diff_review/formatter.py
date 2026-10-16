@@ -1,11 +1,13 @@
 import json
-import sys
+import re
 from datetime import date
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 from rich import box
 from .schema import ReviewOutput
+from .security import redact_output, redact_secrets
 
 console = Console()
 
@@ -29,19 +31,25 @@ _SEVERITY_EMOJI = {
 
 
 def format_json(output: ReviewOutput) -> str:
-    return json.dumps(output.model_dump(), indent=2)
+    return json.dumps(redact_output(output).model_dump(), indent=2)
 
 
 def format_markdown(output: ReviewOutput, source: str = "") -> str:
+    output = redact_output(output)
     verdict_display = output.verdict.upper().replace("_", " ")
     lines = [f"# diff-review: {verdict_display}\n"]
 
     meta = [f"**Date:** {date.today()}"]
     if source:
-        meta.append(f"**Source:** {source}")
+        meta.append(f"**Source:** {redact_secrets(source)}")
     lines.append("  \n".join(meta))
     lines.append("\n---\n")
     lines.append(f"## Summary\n\n{output.summary}\n")
+    coverage = output.coverage
+    status = "Complete" if coverage.complete else "Incomplete"
+    lines.append(f"**Model coverage:** {status} — {len(coverage.reviewed_files)} files, {coverage.reviewed_chunks} chunks.\n")
+    if coverage.skipped_files:
+        lines.append("**Excluded files:** " + ", ".join(f"`{path}`" for path in coverage.skipped_files) + "\n")
 
     if output.issues:
         lines.append(f"---\n\n## Issues ({len(output.issues)} found)\n")
@@ -52,7 +60,8 @@ def format_markdown(output: ReviewOutput, source: str = "") -> str:
             lines.append(f"**Issue:** {issue.description}  ")
             lines.append(f"**Suggestion:** {issue.suggestion}  ")
             if issue.evidence:
-                lines.append(f"**Evidence:**\n```\n{issue.evidence}\n```")
+                fence = "`" * max(3, 1 + max((len(run) for run in re.findall(r"`+", issue.evidence)), default=0))
+                lines.append(f"**Evidence:**\n{fence}\n{issue.evidence}\n{fence}")
             lines.append("")
 
     if output.highlights:
@@ -65,6 +74,7 @@ def format_markdown(output: ReviewOutput, source: str = "") -> str:
 
 
 def print_review(output: ReviewOutput, as_json: bool = False, as_markdown: bool = False) -> None:
+    output = redact_output(output)
     if as_json:
         print(format_json(output))
         return
@@ -75,7 +85,13 @@ def print_review(output: ReviewOutput, as_json: bool = False, as_markdown: bool 
 
     style = _VERDICT_STYLE.get(output.verdict, "bold white")
     console.print(Panel(f"[{style}]{output.verdict.upper()}[/{style}]", title="Verdict"))
-    console.print(f"\n[bold]Summary[/bold]\n{output.summary}\n")
+    console.print("\n[bold]Summary[/bold]")
+    console.print(Text(output.summary + "\n"))
+    coverage = output.coverage
+    status = "complete" if coverage.complete else "incomplete"
+    console.print(f"Model coverage: {status} — {len(coverage.reviewed_files)} files, {coverage.reviewed_chunks} chunks.")
+    if coverage.skipped_files:
+        console.print(Text("Excluded files: " + ", ".join(coverage.skipped_files)))
 
     if output.issues:
         has_rules = any(issue.rule for issue in output.issues)
@@ -92,15 +108,15 @@ def print_review(output: ReviewOutput, as_json: bool = False, as_markdown: bool 
             sev_style = _SEVERITY_STYLE.get(issue.severity, "white")
             row = [f"[{sev_style}]{issue.severity}[/{sev_style}]"]
             if has_rules:
-                row.append(issue.rule)
-            row += [issue.file, issue.description, issue.suggestion, issue.evidence]
+                row.append(Text(issue.rule))
+            row += [Text(value) for value in (issue.file, issue.description, issue.suggestion, issue.evidence)]
             table.add_row(*row)
         console.print(table)
 
     if output.highlights:
         console.print("[bold green]Highlights[/bold green]")
         for h in output.highlights:
-            console.print(f"  [green]✓[/green] {h}")
+            console.print(Text(f"  ✓ {h}"))
 
 
 _INPUT_COST_PER_TOKEN = 3.0 / 1_000_000   # $3 / MTok  (claude-sonnet-4-6)
