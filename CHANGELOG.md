@@ -6,6 +6,28 @@ Format: `[version] - YYYY-MM-DD` followed by `Added`, `Changed`, `Fixed`, or `Re
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Reject truncated or malformed patch hunks before review, including excluded files.
+- Preserve private-key redaction across hunk boundaries and keep the highest scanner severity when masked evidence collides.
+- Avoid generating context-only hunks when splitting large changes.
+- Preserve all changed lines by splitting large hunks with accurate ranges and explicit byte/line budgets.
+- Retry invalid model responses once, validate file/evidence/schema fields, and stop on incomplete reviews.
+- Prevent synthesis from dropping or downgrading verified high-severity findings.
+- Detect secrets despite surrounding comments, HTML, environment fallbacks, and quoted JSON keys.
+- Mask recognized credentials and private-key bodies before model requests and in all output formats.
+- Match exclusions by basename/suffix, report excluded files, and prevent approval of incomplete reviews.
+- Handle lockfile-only reviews without model credentials and report expected input/API failures cleanly.
+
+### Added
+- Installed-CLI integration tests using the real Anthropic SDK against a local HTTP server, plus randomized patch reconstruction checks.
+- Coverage metadata and optional `--fail-on` policies for CI, while retaining advisory exit behavior by default.
+- Regression tests for the pipeline, CLI, chunking, scanner, credential redaction, and GitHub failures.
+- Pinned development/CI dependencies and a Python 3.11–3.14 CI matrix.
+
+---
+
 ## [0.4.0] - 2026-07-07
 
 ### Added
