@@ -2,18 +2,19 @@
 #    uv pip compile --universal --python-version 3.11 --extra dev pyproject.toml -o requirements-dev.lock
 annotated-types==0.8.0
     # via pydantic
-anthropic==1.15.0
+anthropic==2.7.0
     # via diff-review (pyproject.toml)
-anyio==4.15.1
+anyio==4.16.0
     # via
     #   anthropic
     #   httpx
     #   httpx2
     #   langsmith
-certifi==2026.7.22
+certifi==2026.10.23
     # via
     #   httpcore
     #   httpx
+    #   langchain-core
     #   requests
 charset-normalizer==3.5.2
     # via requests
@@ -29,14 +30,14 @@ h11==0.16.0
     #   httpcore2
 httpcore==1.0.9
     # via httpx
-httpcore2==2.13.1 ; sys_platform != 'emscripten'
+httpcore2==2.16.0 ; sys_platform != 'emscripten'
     # via httpx2
 httpx==0.28.1
     # via
     #   diff-review (pyproject.toml)
     #   langchain-core
     #   langgraph-sdk
-httpx2==2.13.1
+httpx2==2.16.0
     # via
     #   anthropic
     #   langsmith
@@ -50,45 +51,45 @@ idna==3.20
     #   requests
 iniconfig==2.3.1
     # via pytest
-jiter==0.17.0
+jiter==0.19.0
     # via anthropic
-jsonpatch==1.35
+jsonpatch==1.45
     # via langchain-core
-jsonpointer==3.2.1
+jsonpointer==3.10
     # via jsonpatch
-langchain-core==1.6.11
+langchain-core==1.7.7
     # via
     #   langgraph
     #   langgraph-checkpoint
     #   langgraph-prebuilt
     #   langgraph-sdk
-langchain-protocol==0.0.19
+langchain-protocol==0.0.21
     # via
     #   langchain-core
     #   langgraph-sdk
-langgraph==1.2.15
+langgraph==1.2.20
     # via diff-review (pyproject.toml)
-langgraph-checkpoint==4.3.0
+langgraph-checkpoint==4.3.1
     # via
     #   langgraph
     #   langgraph-prebuilt
 langgraph-prebuilt==1.1.1
     # via langgraph
-langgraph-sdk==0.4.7
+langgraph-sdk==0.4.14
     # via langgraph
-langsmith==0.14.9
+langsmith==0.14.17
     # via langchain-core
 markdown-it-py==4.2.0
     # via rich
 mdurl==0.1.2
     # via markdown-it-py
-opentelemetry-api==1.45.1
+opentelemetry-api==1.45.2
     # via anthropic
 orjson==3.13.0
     # via
     #   langgraph-sdk
     #   langsmith
-ormsgpack==1.13.0
+ormsgpack==1.13.1
     # via langgraph-checkpoint
 packaging==26.3
     # via
@@ -97,20 +98,20 @@ packaging==26.3
     #   pytest
 pluggy==1.7.0
     # via pytest
-pydantic==2.14.1
+pydantic==2.14.3
     # via
     #   diff-review (pyproject.toml)
     #   anthropic
     #   langchain-core
     #   langgraph
     #   langsmith
-pydantic-core==2.50.1
+pydantic-core==2.50.4
     # via pydantic
 pygments==2.21.0
     # via
     #   pytest
     #   rich
-pytest==9.1.1
+pytest==9.2.0
     # via diff-review (pyproject.toml)
 pyyaml==6.0.3
     # via langchain-core
@@ -145,19 +146,19 @@ typing-extensions==4.16.0
     #   pydantic
     #   pydantic-core
     #   typing-inspection
-typing-inspection==0.4.4
+typing-inspection==0.4.5
     # via pydantic
 urllib3==2.8.0
     # via requests
-uuid-utils==0.17.1
+uuid-utils==0.19.0
     # via
     #   langchain-core
     #   langsmith
-websockets==16.1.1
+websockets==17.4
     # via
     #   langgraph-sdk
     #   langsmith
-xxhash==4.0.1
+xxhash==4.1.0
     # via
     #   langgraph
     #   langsmith

@@ -106,3 +106,26 @@ def test_synthesis_budget_fails_before_api(patch_text, monkeypatch):
     monkeypatch.setattr(nodes, "_MAX_SYNTHESIS_BYTES", 1)
     with pytest.raises(RuntimeError, match="synthesis budget"):
         nodes.synthesize({"file_chunks": [patch_text()], "file_reviews": ['{"issues":[],"highlights":[]}']})
+
+
+def test_failed_chunk_cancels_queued_reviews(patch_text, monkeypatch):
+    import threading
+    import time
+
+    calls = []
+    lock = threading.Lock()
+
+    def fake_review(chunk, security=False):
+        with lock:
+            calls.append(chunk)
+            first = len(calls) == 1
+        if first:
+            raise RuntimeError("Model API request failed during review.")
+        time.sleep(0.05)
+        return '{"issues": [], "highlights": []}', 0, 0
+
+    monkeypatch.setattr(nodes, "_review_chunk", fake_review)
+    chunks = [patch_text() for _ in range(40)]
+    with pytest.raises(RuntimeError, match="Model API request failed"):
+        nodes.review_chunks({"file_chunks": chunks})
+    assert len(calls) < len(chunks)

@@ -24,7 +24,10 @@ def api_server():
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             with lock:
-                requests.append({"body": body, "path": self.path, "key": self.headers.get("x-api-key")})
+                auth = self.headers.get("authorization", "")
+                # SDK 1.x sends x-api-key; SDK 2.x sends Authorization: Bearer.
+                key = self.headers.get("x-api-key") or (auth[7:] if auth.startswith("Bearer ") else None)
+                requests.append({"body": body, "path": self.path, "key": key})
                 number = len(requests)
             if mode["value"] == "http400":
                 status = 400
