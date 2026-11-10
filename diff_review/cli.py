@@ -10,6 +10,13 @@ from .providers import (DEFAULT_ANTHROPIC_MODEL, PROVIDERS, REASONING_LEVELS, co
 from .security import merge_secret_issues, redact_output, redact_secrets, scan_secrets
 
 
+def _positive_int(value: str) -> int:
+    number = int(value) if value.isdigit() else 0
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a whole number of at least 1")
+    return number
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="diff-review",
@@ -74,7 +81,7 @@ def main() -> None:
         "Local thinking models: none is much faster. Default: the model's own.",
     )
     model.add_argument(
-        "--concurrency", type=int, metavar="N",
+        "--concurrency", type=_positive_int, metavar="N",
         help="Parallel model requests (default: 8 hosted, 1 for a local server).",
     )
     parser.add_argument(
@@ -90,9 +97,6 @@ def main() -> None:
 
     if args.pr and args.file:
         print("Error: --pr and a diff file are mutually exclusive.", file=sys.stderr)
-        sys.exit(1)
-    if args.concurrency is not None and args.concurrency < 1:
-        print("Error: --concurrency must be at least 1.", file=sys.stderr)
         sys.exit(1)
     configure(provider=args.provider, model=args.model, base_url=args.base_url,
               reasoning=args.reasoning)

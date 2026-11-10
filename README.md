@@ -14,7 +14,7 @@ The goal is simple: get a second pass on a change before merging it, with output
 - Local secrets scan and credential masking in every mode; optional `--security` focuses the model on a security ruleset
 - Returns terminal output, JSON, or Markdown
 - Includes file names, severity, suggestions, and quoted evidence from the diff
-- Prints token usage and an estimated cost for each run
+- Prints token usage for each run, with an estimated cost on Claude
 - Runs fully offline on local models: the diff never leaves your machine
 
 ## How it works
@@ -61,7 +61,7 @@ pip install -c requirements-dev.lock -e ".[dev]"
 
 ### Configure
 
-The default provider is the Claude API. Set an Anthropic API key before running real reviews:
+The default provider is the Claude API. Set an Anthropic API key before running real reviews, or skip this and use a [local model](#local-models):
 
 ```bash
 export ANTHROPIC_API_KEY=your-key-here
@@ -87,6 +87,8 @@ Every provider except Claude needs the `openai` extra:
 
 ```bash
 pipx install 'diff-review[openai] @ git+https://github.com/machinellabs/diff-review'
+# or add it to an existing install
+pipx inject diff-review openai
 ```
 
 #### Local models
@@ -113,10 +115,10 @@ printed. Local runs are built to hold up with smaller models:
   `+`/`-` markers, or elide with `...`. Quotes are matched line by line and
   replaced with the exact lines from the diff, so output evidence is always
   verbatim. See [Review coverage and failures](#review-coverage-and-failures).
-- **One request at a time** for local and LAN servers, since most run one
-  generation at a time and queued requests would time out. Override with
-  `--concurrency N`. Local requests time out after 30 minutes
-  (`DIFF_REVIEW_TIMEOUT`, in seconds).
+- **One request at a time** for servers on localhost, a private network, or
+  Tailscale, since most run one generation at a time and queued requests would
+  time out. Override with `--concurrency N`. Requests to any custom server time
+  out after 30 minutes (`DIFF_REVIEW_TIMEOUT`, in seconds).
 - **Thinking control.** `--reasoning none` turns off thinking on reasoning
   models (Qwen 3, gpt-oss, DeepSeek-R1, ...), which is much faster. Reasoning
   tags in replies are stripped either way.
@@ -191,13 +193,13 @@ blocks, credential assignments). Those findings are merged into the review
 deterministically. A detected high-severity credential produces `REQUEST_CHANGES`,
 and a possible credential prevents an `APPROVE` verdict even if the model misses it.
 
-Recognized credentials are replaced with `[REDACTED]` before sending the diff
-to Claude and in report output, including private-key bodies. The scanner
+Recognized credentials are replaced with `[REDACTED]` before the diff is sent
+to any model and in report output, including private-key bodies. The scanner
 checks placeholder **values**, so comments and environment-variable fallbacks
 do not suppress token detection. Redaction is pattern-based and can miss
-unrecognized secrets. Review content still goes to the configured Anthropic
-service; inspect sensitive changes before using a remote review. There is no
-raw-credential bypass flag.
+unrecognized secrets. With a hosted provider (Claude or the OpenAI API), the
+redacted diff still leaves your machine; use a [local model](#local-models) for
+sensitive changes. There is no raw-credential bypass flag.
 
 To see it in action, review the intentionally vulnerable example diff:
 
@@ -213,7 +215,7 @@ From a development checkout:
 pytest
 ```
 
-Tests mock model requests and need no API key. `requirements-dev.lock` pins
+Tests mock model requests and need no API key or model server. `requirements-dev.lock` pins
 the development/CI environment across Python 3.11–3.14. Refresh it deliberately
 with `uv pip compile --universal --python-version 3.11 --extra dev pyproject.toml -o requirements-dev.lock`.
 Integration tests run the installed CLI and real Anthropic SDK against a local
@@ -263,30 +265,43 @@ git diff main...HEAD | diff-review --json --fail-on non-approval
 `--fail-on request_changes` rejects that verdict only; `--fail-on non-approval`
 also rejects `NEEDS_DISCUSSION`, including incomplete coverage. Reports are
 written before a policy failure exits. The default `--fail-on never` retains
-advisory behavior. Exit codes: `0` completed/advisory, `1` operational failure,
-`2` verdict-policy failure or invalid CLI arguments, `130` cancellation.
+advisory behavior.
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Review completed (advisory) |
+| `1` | Operational failure: bad input, missing key or model, API or server error, refusal, or both `--pr` and a diff file |
+| `2` | Verdict-policy failure, or an invalid flag or flag value |
+| `130` | Cancelled |
 
 ## Example output
 
 ```text
-╭─────────────────╮
-│ REQUEST_CHANGES │
-╰─────────────────╯
+╭──────────────────────────────── Verdict ─────────────────────────────────╮
+│ REQUEST_CHANGES                                                          │
+╰──────────────────────────────────────────────────────────────────────────╯
 
 Summary
 The changes introduce a new caching layer but the TTL logic has an off-by-one
 error and there is no test coverage for the expiry path.
 
-Severity   File            Issue                         Suggestion
-high       src/cache.py    TTL comparison uses > not >=  Change to >= to include boundary
-medium     src/cache.py    No test for expired entries   Add a test with a frozen clock
+Model coverage: complete — 2 files, 2 chunks.
+
+  Severity   File           Issue              Suggestion          Evidence
+ ────────────────────────────────────────────────────────────────────────────
+  high       src/cache.py   TTL comparison     Change to >= to     +    if elapsed
+                            uses > not >=      include boundary    > ttl:
+  medium     src/cache.py   No test for        Add a test with a   +def get(self,
+                            expired entries    frozen clock        key):
 
 Highlights
   ✓ Clean separation between cache interface and storage backend
   ✓ Good use of type hints throughout
 
-Tokens - reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0254)
+Tokens — reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0169)
 ```
+
+In `--security` mode the table also has a Rule column.
 
 Verdicts:
 
@@ -302,20 +317,32 @@ git diff main...HEAD | diff-review --json
 
 ```json
 {
-  "verdict": "request_changes",
-  "summary": "...",
   "issues": [
     {
       "severity": "high",
       "file": "src/cache.py",
       "description": "TTL comparison uses > not >=",
       "suggestion": "Change to >= to include boundary",
-      "evidence": "+    if elapsed > ttl:"
+      "evidence": "+    if elapsed > ttl:",
+      "rule": ""
     }
   ],
-  "highlights": ["Clean separation between cache interface and storage backend"]
+  "highlights": ["Clean separation between cache interface and storage backend"],
+  "verdict": "request_changes",
+  "summary": "...",
+  "coverage": {
+    "complete": true,
+    "reviewed_files": ["src/cache.py", "tests/test_cache.py"],
+    "skipped_files": [],
+    "reviewed_chunks": 2,
+    "unverified_findings": 0
+  }
 }
 ```
+
+`rule` holds a rule ID such as `SEC-INJ` in `--security` mode and is empty
+otherwise. `coverage` is described in
+[Review coverage and failures](#review-coverage-and-failures).
 
 ## Markdown output
 
@@ -335,8 +362,12 @@ The estimate is omitted for local and OpenAI-compatible endpoints, where
 pricing varies by model and server:
 
 ```text
-Tokens - reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0254)
+Tokens — reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0169)
 ```
+
+That estimate is at `claude-sonnet-5-5` prices ($2 / $10 per million input /
+output tokens). Prices are built in for current Claude models; another model
+set through `ANTHROPIC_MODEL` shows tokens without a cost.
 
 Token usage is not included in `--json` or `--markdown` output, so saved artifacts stay clean.
 
@@ -360,11 +391,21 @@ git review-last
 ## GitHub Actions example
 
 ```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0  # the base branch must be available to diff against
+- run: pipx install git+https://github.com/machinellabs/diff-review
 - name: AI code review
-  run: git diff ${{ github.base_ref }}...HEAD | diff-review
+  run: |
+    git diff "origin/${{ github.base_ref }}...HEAD" \
+      | diff-review --markdown --output review.md --fail-on request_changes
+    cat review.md >> "$GITHUB_STEP_SUMMARY"
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
+
+On a self-hosted runner with a model server, use `--provider ollama --model
+NAME` instead and no secret is needed.
 
 This repo reviews its own pull requests with the workflow in
 [`.github/workflows/review.yml`](.github/workflows/review.yml) — the Markdown
@@ -380,9 +421,10 @@ For local development, use the install-from-source commands above, then run `pyt
 |------------------------|--------------------------|------------------------------------------------------------|
 | `DIFF_REVIEW_PROVIDER` | `anthropic`              | `anthropic`, `openai`, `ollama`, or `lmstudio`             |
 | `DIFF_REVIEW_REASONING`| *(model default)*        | `none`, `low`, `medium`, or `high`                         |
-| `DIFF_REVIEW_TIMEOUT`  | `1800` local, `600` else | Per-request timeout in seconds (OpenAI-compatible)         |
+| `DIFF_REVIEW_TIMEOUT`  | `1800` custom server, `600` OpenAI | Per-request timeout in seconds (OpenAI-compatible) |
 | `ANTHROPIC_API_KEY`    | *(required for Claude)*  | Anthropic API key (`ANTHROPIC_AUTH_TOKEN` also accepted)   |
 | `ANTHROPIC_MODEL`      | `claude-sonnet-5-5`      | Claude model                                               |
+| `ANTHROPIC_BASE_URL`   | *(Claude API)*           | Proxy or gateway; turns off the server-side refusal fallback |
 | `OPENAI_MODEL`         | *(required)*             | Model for `openai`, `ollama`, and `lmstudio`               |
 | `OPENAI_BASE_URL`      | *(preset or OpenAI)*     | OpenAI-compatible endpoint, e.g. `http://localhost:8080/v1`|
 | `OPENAI_API_KEY`       | *(OpenAI API only)*      | Not needed for local servers                               |
@@ -396,6 +438,7 @@ flags override the corresponding settings per run.
 
 - Python 3.11+
 - `ANTHROPIC_API_KEY` for Claude, or a local model server (no key)
+- Git, to run the test suite
 
 ## Project structure
 

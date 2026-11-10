@@ -345,9 +345,10 @@ def test_cli_reports_provider_setup_errors_cleanly(monkeypatch, capsys, patch_te
     assert "Traceback" not in out.err
 
 
-def test_cli_rejects_bad_concurrency(monkeypatch, capsys, patch_text):
-    code, out = _run_cli(monkeypatch, capsys, ["--concurrency", "0"], patch_text())
-    assert code == 1 and "--concurrency" in out.err
+@pytest.mark.parametrize("value", ["0", "-2", "two"])
+def test_cli_rejects_bad_concurrency_as_usage_error(monkeypatch, capsys, patch_text, value):
+    code, out = _run_cli(monkeypatch, capsys, ["--concurrency", value], patch_text())
+    assert code == 2 and "--concurrency" in out.err
 
 
 def test_cli_passes_provider_flags_and_skips_cost_for_local(monkeypatch, capsys, patch_text):

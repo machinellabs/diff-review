@@ -6,6 +6,14 @@ Format: `[version] - YYYY-MM-DD` followed by `Added`, `Changed`, `Fixed`, or `Re
 
 ---
 
+## [Unreleased]
+
+### Changed
+- An invalid `--concurrency` value is a usage error (exit `2`, like other invalid flag values) instead of exit `1`
+- README brought up to date with the 0.5.0 output format, providers, exit codes, and CI example
+
+---
+
 ## [0.5.0] - 2026-11-10
 
 ### Added
