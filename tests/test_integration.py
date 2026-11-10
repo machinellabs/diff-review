@@ -10,6 +10,8 @@ from threading import Lock, Thread
 
 import pytest
 
+from diff_review import __version__
+
 
 @pytest.fixture
 def api_server():
@@ -126,7 +128,7 @@ def test_real_sdk_failures_produce_no_artifact(api_server, patch_text, tmp_path,
     assert len(requests) == expected_count
 
 
-@pytest.mark.parametrize("option,expected", [("--help", "usage: diff-review"), ("--version", "diff-review 0.4.0")])
+@pytest.mark.parametrize("option,expected", [("--help", "usage: diff-review"), ("--version", f"diff-review {__version__}")])
 def test_cli_help_and_version_without_credentials(option, expected):
     env = {"PATH": os.environ.get("PATH", ""), "PYTHONIOENCODING": "utf-8"}
     result = run_cli(env, "", option)

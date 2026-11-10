@@ -119,11 +119,9 @@ def print_review(output: ReviewOutput, as_json: bool = False, as_markdown: bool 
             console.print(Text(f"  ✓ {h}"))
 
 
-_INPUT_COST_PER_TOKEN = 3.0 / 1_000_000   # $3 / MTok  (claude-sonnet-4-6)
-_OUTPUT_COST_PER_TOKEN = 15.0 / 1_000_000  # $15 / MTok
-
-
-def print_token_usage(usage: dict) -> None:
+def print_token_usage(usage: dict, pricing=None) -> None:
+    """Print token counts, with a cost estimate when the provider knows its
+    pricing (``None`` for local servers or unknown models)."""
     if not usage:
         return
     r_in = usage.get("review_input_tokens", 0)
@@ -132,11 +130,13 @@ def print_token_usage(usage: dict) -> None:
     s_out = usage.get("synthesis_output_tokens", 0)
     t_in = r_in + s_in
     t_out = r_out + s_out
-    cost = t_in * _INPUT_COST_PER_TOKEN + t_out * _OUTPUT_COST_PER_TOKEN
+    cost = (t_in * pricing.input_per_token + t_out * pricing.output_per_token
+            if pricing else None)
+    cost_note = f"  (~${cost:.4f})" if cost is not None else ""
     console.print(
         f"\n[dim]Tokens — "
         f"reviews: {r_in:,} in / {r_out:,} out  "
         f"| synthesis: {s_in:,} in / {s_out:,} out  "
-        f"| total: {t_in:,} in / {t_out:,} out  "
-        f"(~${cost:.4f})[/dim]"
+        f"| total: {t_in:,} in / {t_out:,} out"
+        f"{cost_note}[/dim]"
     )

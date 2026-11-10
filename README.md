@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/machinellabs/diff-review/actions/workflows/ci.yml/badge.svg)](https://github.com/machinellabs/diff-review/actions/workflows/ci.yml)
 
-`diff-review` is a command-line tool that reviews git diffs with Claude. It works with local diffs, saved patch files, and GitHub pull request URLs.
+`diff-review` is a command-line tool that reviews git diffs with Claude, the OpenAI API, or a local model you run yourself (Ollama, LM Studio, llama.cpp, vLLM). It works with local diffs, saved patch files, and GitHub pull request URLs.
 
 The goal is simple: get a second pass on a change before merging it, with output that is easy to read in the terminal or reuse in another workflow.
 
@@ -15,6 +15,7 @@ The goal is simple: get a second pass on a change before merging it, with output
 - Returns terminal output, JSON, or Markdown
 - Includes file names, severity, suggestions, and quoted evidence from the diff
 - Prints token usage and an estimated cost for each run
+- Runs fully offline on local models: the diff never leaves your machine
 
 ## How it works
 
@@ -29,7 +30,7 @@ flowchart LR
 Pipeline:
 
 1. **Parse** - split the diff into file-level chunks
-2. **Review** - send file chunks to Claude in parallel, up to 8 at a time
+2. **Review** - send file chunks to the model in parallel (8 at a time for hosted APIs, 1 for a local server)
 3. **Synthesize** - combine the file reviews into a final verdict
 
 ## How to run it
@@ -60,7 +61,7 @@ pip install -c requirements-dev.lock -e ".[dev]"
 
 ### Configure
 
-Set an Anthropic API key before running real reviews:
+The default provider is the Claude API. Set an Anthropic API key before running real reviews:
 
 ```bash
 export ANTHROPIC_API_KEY=your-key-here
@@ -71,6 +72,69 @@ For private GitHub repos, or to avoid public API rate limits, set a GitHub token
 ```bash
 export GITHUB_TOKEN=your-token-here
 ```
+
+### Model providers
+
+| Provider | Flag | Needs |
+|----------|------|-------|
+| Claude (default) | `--provider anthropic` | `ANTHROPIC_API_KEY`; default model `claude-sonnet-5-5` |
+| Ollama | `--provider ollama --model NAME` | Ollama running (`OLLAMA_HOST` respected) |
+| LM Studio | `--provider lmstudio --model NAME` | LM Studio's local server on port 1234 |
+| Any OpenAI-compatible server | `--provider openai --base-url URL --model NAME` | llama.cpp `llama-server`, vLLM, LocalAI, Jan, ... |
+| OpenAI API | `--provider openai --model NAME` | `OPENAI_API_KEY` |
+
+Every provider except Claude needs the `openai` extra:
+
+```bash
+pipx install 'diff-review[openai] @ git+https://github.com/machinellabs/diff-review'
+```
+
+#### Local models
+
+```bash
+ollama pull qwen3.8:27b-q4_K_M
+git diff | diff-review --provider ollama --model qwen3.8:27b-q4_K_M
+
+# llama.cpp, vLLM, or any other OpenAI-compatible server
+git diff | diff-review --provider openai --base-url http://localhost:8080/v1 --model my-model
+
+# Set it once instead of passing flags
+export DIFF_REVIEW_PROVIDER=ollama OPENAI_MODEL=gemma4:26b
+```
+
+No API key is needed, nothing is sent off the machine, and no cost estimate is
+printed. Local runs are built to hold up with smaller models:
+
+- **Structured output.** Requests carry the review's JSON Schema
+  (`response_format: json_schema`), so servers that support constrained
+  decoding cannot return malformed or incomplete JSON. Servers that reject it
+  fall back to JSON mode, then to prompt-only JSON.
+- **Tolerant evidence matching.** Models often re-indent quotes, drop the
+  `+`/`-` markers, or elide with `...`. Quotes are matched line by line and
+  replaced with the exact lines from the diff, so output evidence is always
+  verbatim. See [Review coverage and failures](#review-coverage-and-failures).
+- **One request at a time** for local and LAN servers, since most run one
+  generation at a time and queued requests would time out. Override with
+  `--concurrency N`. Local requests time out after 30 minutes
+  (`DIFF_REVIEW_TIMEOUT`, in seconds).
+- **Thinking control.** `--reasoning none` turns off thinking on reasoning
+  models (Qwen 3, gpt-oss, DeepSeek-R1, ...), which is much faster. Reasoning
+  tags in replies are stripped either way.
+
+On a Mac Studio, the bundled `examples/insecure.diff` takes about a minute in
+`--security` mode with `qwen3.8:27b-q4_K_M --reasoning none` or `gemma4:26b`,
+and both report all four planted issues. Review quality tracks the model:
+small (7-9B) models complete reviews but over-report severity.
+
+#### Claude
+
+`--model` or `ANTHROPIC_MODEL` picks another Claude model, and `--reasoning
+low|medium|high` sets its effort. On current models, a request declined by a
+safety classifier is retried on a fallback model automatically (server-side
+fallback, Claude API only). If the whole chain declines, the run stops with
+the refusal category. Security tooling can occasionally trip the cyber
+classifier; Anthropic's Cyber Verification Program covers legitimate
+security work.
 
 ### Run
 
@@ -178,10 +242,17 @@ are omitted; every added and removed line is retained.
 
 Each model response is validated, including verdict/severity values, file paths,
 and evidence quotes. Invalid or incomplete responses get one additional attempt.
-A persistent failure stops the run without a verdict; file reviews are never
-silently dropped. Verified high-severity findings survive synthesis. Complete
-coverage means every eligible chunk was processed, not that the model found
-every possible bug.
+A persistent schema failure, refusal, or API error stops the run without a
+verdict; file reviews are never silently dropped. Verified high-severity
+findings survive synthesis. Complete coverage means every eligible chunk was
+processed, not that the model found every possible bug.
+
+Every finding must quote the diff. Quotes are matched line by line, ignoring
+diff markers, indentation, `line N:` labels and `...` elisions, and are then
+replaced with the exact lines they match. A finding whose quote still matches
+nothing after the retry is discarded rather than reported. Discarded findings
+are counted in `coverage.unverified_findings` and noted in the summary, and a
+discarded high-severity finding prevents an `APPROVE` verdict.
 
 For CI gating:
 
@@ -258,7 +329,10 @@ diff-review --pr https://github.com/owner/repo/pull/123 --markdown --output revi
 
 ## Token usage
 
-Every terminal run prints a per-phase token breakdown and cost estimate:
+Every terminal run prints a per-phase token breakdown, with a cost estimate
+when the model's pricing is known: Claude models at first-party list prices.
+The estimate is omitted for local and OpenAI-compatible endpoints, where
+pricing varies by model and server:
 
 ```text
 Tokens - reviews: 1,842 in / 398 out  | synthesis: 3,201 in / 287 out  | total: 5,043 in / 685 out  (~$0.0254)
@@ -302,22 +376,33 @@ For local development, use the install-from-source commands above, then run `pyt
 
 ## Configuration
 
-| Environment variable | Default             | Description                                   |
-|----------------------|---------------------|-----------------------------------------------|
-| `ANTHROPIC_API_KEY`  | *(required)*        | Anthropic API key                             |
-| `ANTHROPIC_MODEL`    | `claude-sonnet-4-6` | Model to use for review                       |
-| `GITHUB_TOKEN`       | *(optional)*        | GitHub token for private repos or rate limits |
+| Environment variable   | Default                  | Description                                                |
+|------------------------|--------------------------|------------------------------------------------------------|
+| `DIFF_REVIEW_PROVIDER` | `anthropic`              | `anthropic`, `openai`, `ollama`, or `lmstudio`             |
+| `DIFF_REVIEW_REASONING`| *(model default)*        | `none`, `low`, `medium`, or `high`                         |
+| `DIFF_REVIEW_TIMEOUT`  | `1800` local, `600` else | Per-request timeout in seconds (OpenAI-compatible)         |
+| `ANTHROPIC_API_KEY`    | *(required for Claude)*  | Anthropic API key (`ANTHROPIC_AUTH_TOKEN` also accepted)   |
+| `ANTHROPIC_MODEL`      | `claude-sonnet-5-5`      | Claude model                                               |
+| `OPENAI_MODEL`         | *(required)*             | Model for `openai`, `ollama`, and `lmstudio`               |
+| `OPENAI_BASE_URL`      | *(preset or OpenAI)*     | OpenAI-compatible endpoint, e.g. `http://localhost:8080/v1`|
+| `OPENAI_API_KEY`       | *(OpenAI API only)*      | Not needed for local servers                               |
+| `OLLAMA_HOST`          | `localhost:11434`        | Ollama address for `--provider ollama`                     |
+| `GITHUB_TOKEN`         | *(optional)*             | GitHub token for private repos or rate limits              |
+
+The `--provider`, `--model`, `--base-url`, `--reasoning`, and `--concurrency`
+flags override the corresponding settings per run.
 
 ## Requirements
 
 - Python 3.11+
-- `ANTHROPIC_API_KEY` environment variable set for real reviews
+- `ANTHROPIC_API_KEY` for Claude, or a local model server (no key)
 
 ## Project structure
 
 ```text
 diff_review/
 ├── schema.py     # Pydantic output models + LangGraph state
+├── providers.py  # Claude + OpenAI-compatible providers (Ollama, LM Studio, llama.cpp, OpenAI)
 ├── nodes.py      # Parse, review, synthesize steps
 ├── diff.py       # File paths, exclusions, and complete hunk splitting
 ├── security.py   # Local credential detection and redaction

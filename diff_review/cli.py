@@ -1,11 +1,12 @@
 import argparse
-import os
 import sys
 from . import __version__
 from .github import fetch_pr_diff
 from .graph import build_graph
 from .formatter import format_json, format_markdown, print_review, print_token_usage
 from .nodes import parse_diff
+from .providers import (DEFAULT_ANTHROPIC_MODEL, PROVIDERS, REASONING_LEVELS, configure,
+                        get_provider)
 from .security import merge_secret_issues, redact_output, redact_secrets, scan_secrets
 
 
@@ -47,6 +48,35 @@ def main() -> None:
         action="store_true",
         help="Security-focused review: injection, secrets, authz, deserialization, and more.",
     )
+    model = parser.add_argument_group(
+        "model provider",
+        "Claude by default. Local models run through any OpenAI-compatible server.",
+    )
+    model.add_argument(
+        "--provider", choices=PROVIDERS,
+        help="anthropic (default, or DIFF_REVIEW_PROVIDER); openai for the OpenAI API or any "
+        "OpenAI-compatible server via --base-url; ollama and lmstudio for those local servers "
+        "at their default addresses.",
+    )
+    model.add_argument(
+        "--model",
+        help=f"Model name. anthropic default: {DEFAULT_ANTHROPIC_MODEL} (or ANTHROPIC_MODEL). "
+        "Required for the other providers (or OPENAI_MODEL), e.g. qwen3.8:27b-q4_K_M.",
+    )
+    model.add_argument(
+        "--base-url", metavar="URL",
+        help="OpenAI-compatible server URL, e.g. http://localhost:8080/v1 for llama.cpp "
+        "(or OPENAI_BASE_URL). Overrides the ollama/lmstudio default address.",
+    )
+    model.add_argument(
+        "--reasoning", choices=REASONING_LEVELS,
+        help="Thinking depth (or DIFF_REVIEW_REASONING). Claude: low/medium/high effort. "
+        "Local thinking models: none is much faster. Default: the model's own.",
+    )
+    model.add_argument(
+        "--concurrency", type=int, metavar="N",
+        help="Parallel model requests (default: 8 hosted, 1 for a local server).",
+    )
     parser.add_argument(
         "--version",
         action="version",
@@ -61,6 +91,11 @@ def main() -> None:
     if args.pr and args.file:
         print("Error: --pr and a diff file are mutually exclusive.", file=sys.stderr)
         sys.exit(1)
+    if args.concurrency is not None and args.concurrency < 1:
+        print("Error: --concurrency must be at least 1.", file=sys.stderr)
+        sys.exit(1)
+    configure(provider=args.provider, model=args.model, base_url=args.base_url,
+              reasoning=args.reasoning)
 
     try:
         _run(args)
@@ -91,11 +126,12 @@ def _run(args) -> None:
     found = scan_secrets(diff)
     safe_diff = redact_secrets(diff)
     parsed = parse_diff({"diff": safe_diff})
-    if parsed["file_chunks"] and not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        raise ValueError("ANTHROPIC_API_KEY environment variable is not set.")
+    # Set up the provider before the graph runs so misconfiguration (missing
+    # key, model or openai extra) exits cleanly. Scan-only diffs need none.
+    provider = get_provider() if parsed["file_chunks"] else None
     result = build_graph().invoke({
         "diff": safe_diff, "file_chunks": [], "file_reviews": [],
-        "output": None, "security": args.security,
+        "output": None, "security": args.security, "concurrency": args.concurrency,
     })
     output = result["output"]
     output.issues = merge_secret_issues(output.issues, found)
@@ -114,7 +150,8 @@ def _run(args) -> None:
         print(f"Saved to {redact_secrets(args.output)}", file=sys.stderr)
     print_review(output, as_json=args.json, as_markdown=args.markdown)
     if not args.json and not args.markdown:
-        print_token_usage(result.get("token_usage", {}))
+        print_token_usage(result.get("token_usage", {}),
+                          pricing=provider.pricing if provider else None)
     if ((args.fail_on == "request_changes" and output.verdict == "request_changes")
             or (args.fail_on == "non-approval" and output.verdict != "approve")):
         sys.exit(2)

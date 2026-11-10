@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from diff_review.diff import MAX_CHUNK_BYTES, MAX_CHUNK_LINES, file_path, split_file
+from diff_review.diff import match_evidence, MAX_CHUNK_BYTES, MAX_CHUNK_LINES, file_path, split_file
 from diff_review.nodes import parse_diff
 
 
@@ -181,3 +181,41 @@ def test_randomized_chunk_boundaries_preserve_git_patch_semantics(seed, tmp_path
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "app.txt").read_text() == "".join(after)
     assert all(len(chunk.splitlines()) <= 40 for chunk in chunks)
+
+
+CHUNK = (
+    "diff --git a/cli.py b/cli.py\n--- a/cli.py\n+++ b/cli.py\n@@ -1,0 +1,5 @@\n"
+    "+    graph = build_graph()\n"
+    '+    result = graph.invoke({"diff": diff, "output": None})\n'
+    '+    print_review(result["output"], as_json=args.json)\n'
+    "+    if args.file:\n"
+    "+        with open(args.file) as f:\n"
+)
+
+
+@pytest.mark.parametrize("evidence,expected", [
+    # Real local-model quoting styles observed against qwen3.5:9b.
+    ('    graph = build_graph()\n    result = graph.invoke({"diff": diff, "output": None})', (0, 2)),
+    ("line 30: graph = build_graph()\nline 32: print_review(result[\"output\"], as_json=args.json)", (0, 3)),
+    ("+    if args.file:\n+        with open(args.file) as f:", (3, 5)),
+    ("graph.invoke(...)", (1, 2)),
+    ("with   open(args.file)  as f:", (4, 5)),
+])
+def test_match_evidence_accepts_loose_quotes_and_returns_verbatim_lines(evidence, expected):
+    body = CHUNK.splitlines()[4:]
+    assert match_evidence(evidence, CHUNK) == "\n".join(body[expected[0]:expected[1]])
+
+
+@pytest.mark.parametrize("evidence", [
+    'print_review(result["output"], as_json=True)',            # altered code
+    "with open(args.file) as f:\n    graph = build_graph()",    # out of order
+    "}",                                                       # too short to identify
+    "class ReviewOutput(BaseModel):",                          # not in this chunk
+])
+def test_match_evidence_rejects_inventions(evidence):
+    assert match_evidence(evidence, CHUNK) is None
+
+
+def test_match_evidence_is_idempotent():
+    first = match_evidence("graph = build_graph()\n...\nopen(args.file)", CHUNK)
+    assert match_evidence(first, CHUNK) == first

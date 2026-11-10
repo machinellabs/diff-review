@@ -6,7 +6,26 @@ Format: `[version] - YYYY-MM-DD` followed by `Added`, `Changed`, `Fixed`, or `Re
 
 ---
 
-## [Unreleased]
+## [0.5.0] - 2026-11-10
+
+### Added
+- Local and self-hosted models: `--provider ollama` and `--provider lmstudio` presets (no key or URL needed; `OLLAMA_HOST` respected), and `--provider openai --base-url URL` for llama.cpp, vLLM, LocalAI, Jan, or the OpenAI API itself
+- `--model`, `--base-url`, `--reasoning none|low|medium|high`, and `--concurrency N` flags, plus `DIFF_REVIEW_PROVIDER`, `DIFF_REVIEW_REASONING`, `DIFF_REVIEW_TIMEOUT`, `OPENAI_MODEL`, and `OPENAI_BASE_URL`
+- `openai` optional dependency extra (`pip install 'diff-review[openai]'`)
+- Structured output for OpenAI-compatible servers: the review JSON Schema is sent as `response_format: json_schema`, falling back to JSON mode and then prompt-only JSON
+- Evidence matching tolerant of re-indented, marker-less, labeled, or elided quotes; matched quotes are replaced with the verbatim diff lines
+- `coverage.unverified_findings`: findings whose evidence never matched are discarded and counted instead of failing the whole run; a discarded high finding blocks `approve`
+- Server-side refusal fallback on current Claude models, and a clear error naming the refusal category when a request is declined
+- Installed-CLI integration tests using the real Anthropic SDK against a local HTTP server, plus randomized patch reconstruction checks.
+- Coverage metadata and optional `--fail-on` policies for CI, while retaining advisory exit behavior by default.
+- Regression tests for the pipeline, CLI, chunking, scanner, credential redaction, and GitHub failures.
+- Pinned development/CI dependencies and a Python 3.11–3.14 CI matrix.
+
+### Changed
+- Default Claude model is now `claude-sonnet-5-5` (was `claude-sonnet-4-6`); `max_tokens` raised to 16,000 because current models think adaptively within that budget
+- Cost estimates use per-model Claude list prices and are omitted for local or unknown models
+- Local and LAN servers default to one request at a time; hosted APIs keep 8
+- Supports `anthropic` SDK 2.x (requires `anthropic>=2.7.0`); API error messages explain the status code without echoing the response body
 
 ### Fixed
 - Reject truncated or malformed patch hunks before review, including excluded files.
@@ -19,12 +38,8 @@ Format: `[version] - YYYY-MM-DD` followed by `Added`, `Changed`, `Fixed`, or `Re
 - Mask recognized credentials and private-key bodies before model requests and in all output formats.
 - Match exclusions by basename/suffix, report excluded files, and prevent approval of incomplete reviews.
 - Handle lockfile-only reviews without model credentials and report expected input/API failures cleanly.
+- Thinking and other non-text response blocks are ignored when reading a review
 
-### Added
-- Installed-CLI integration tests using the real Anthropic SDK against a local HTTP server, plus randomized patch reconstruction checks.
-- Coverage metadata and optional `--fail-on` policies for CI, while retaining advisory exit behavior by default.
-- Regression tests for the pipeline, CLI, chunking, scanner, credential redaction, and GitHub failures.
-- Pinned development/CI dependencies and a Python 3.11–3.14 CI matrix.
 
 ---
 

@@ -3,14 +3,27 @@ from types import SimpleNamespace
 
 import pytest
 
-from diff_review import nodes
+from diff_review import providers
+
+_PROVIDER_ENV = (
+    "DIFF_REVIEW_PROVIDER", "DIFF_REVIEW_TIMEOUT", "ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "OLLAMA_HOST",
+)
 
 
 @pytest.fixture(autouse=True)
 def no_live_model(monkeypatch):
+    # Isolate tests from the developer's real credentials and provider setup.
+    for name in _PROVIDER_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
+    providers.configure()
+
     def blocked():
         raise AssertionError("Tests must mock the model client")
-    monkeypatch.setattr(nodes, "_get_client", blocked)
+    monkeypatch.setattr(providers, "_anthropic_client", blocked)
+    yield
+    providers.configure()
 
 
 @pytest.fixture
@@ -46,6 +59,8 @@ def fake_model(monkeypatch):
                 content=[SimpleNamespace(type="text", text=payload if isinstance(payload, str) else json.dumps(payload))],
                 stop_reason="end_turn", usage=SimpleNamespace(input_tokens=10, output_tokens=5),
             )
-        monkeypatch.setattr(nodes, "_get_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=create)))
+        messages = SimpleNamespace(create=create)
+        client = SimpleNamespace(messages=messages, beta=SimpleNamespace(messages=messages))
+        monkeypatch.setattr(providers, "_anthropic_client", lambda: client)
         return calls
     return install

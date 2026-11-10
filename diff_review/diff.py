@@ -199,3 +199,47 @@ def split_file(section: str) -> list[str]:
     if len(current) > len(header):
         chunks.append("".join(current))
     return chunks
+
+
+_ELISION = re.compile(r"\s*(?:\.\.\.|\u2026)\s*")
+_LINE_LABEL = re.compile(r"^(?:line\s*\d+\s*[:.)-]\s*|L\d+\s*[:|]\s*)", re.IGNORECASE)
+_MAX_EVIDENCE_SPAN = 20
+
+
+def _normalize(line: str) -> str:
+    """Line content without its diff marker or whitespace differences."""
+    if line[:1] in ("+", "-", " ") and not line.startswith(("+++ ", "--- ")):
+        line = line[1:]
+    return " ".join(line.split())
+
+
+def match_evidence(evidence: str, text: str) -> str | None:
+    """Return the exact lines of ``text`` that ``evidence`` quotes, else None.
+
+    Models (local ones especially) drop diff markers, re-indent, add
+    ``line N:`` labels or elide with ``...``. Each quoted fragment must still
+    appear, in order, within the lines of ``text``; the result is always
+    verbatim text from ``text``, never the model's paraphrase.
+    """
+    fragments = []
+    for raw in evidence.splitlines():
+        raw = _LINE_LABEL.sub("", raw.strip())
+        fragments.extend(f for f in (_normalize(part) for part in _ELISION.split(raw)) if f)
+    if sum(len(fragment) for fragment in fragments) < 6:
+        return None  # too short to identify a line ("}", "x = 1")
+    lines = text.splitlines()
+    normalized = [_normalize(line) for line in lines]
+    matched: list[int] = []
+    position = 0
+    for fragment in fragments:
+        for index in range(position, len(lines)):
+            if fragment in normalized[index]:
+                break
+        else:
+            return None
+        if not matched or matched[-1] != index:
+            matched.append(index)
+        position = index
+    if matched[-1] - matched[0] < _MAX_EVIDENCE_SPAN:
+        return "\n".join(lines[matched[0]:matched[-1] + 1])
+    return "\n...\n".join(lines[index] for index in matched)

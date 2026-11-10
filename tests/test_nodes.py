@@ -53,11 +53,40 @@ def test_missing_chunk_review_blocks_verdict(patch_text):
         nodes.synthesize({"file_chunks": [patch_text()], "file_reviews": []})
 
 
-@pytest.mark.parametrize("changes", [{"severity": "critical"}, {"evidence": ""}, {"evidence": "+invented()"}, {"file": "wrong.py"}])
-def test_invalid_issue_data_and_unverified_evidence_fail(patch_text, fake_model, changes):
+@pytest.mark.parametrize("changes", [{"severity": "critical"}, {"evidence": ""}])
+def test_invalid_issue_data_fails(patch_text, fake_model, changes):
     fake_model(lambda content, n: {"issues": [issue(**changes)], "highlights": []})
     with pytest.raises(RuntimeError, match="after two attempts"):
         nodes._review_chunk(patch_text(["+eval(user_input)"]))
+
+
+@pytest.mark.parametrize("changes", [{"evidence": "+invented()"}, {"file": "wrong.py"}])
+def test_unverified_findings_are_retried_then_discarded(patch_text, fake_model, changes):
+    calls = fake_model(lambda content, n: {"issues": [issue(**changes)], "highlights": []})
+    raw, _, _ = nodes._review_chunk(patch_text(["+eval(user_input)"]))
+    review = json.loads(raw)
+    assert len(calls) == 2
+    assert "previous response was invalid" in calls[1]["system"]
+    assert review["issues"] == [] and review["unverified"] == ["high"]
+
+
+def test_discarded_high_finding_blocks_approval_and_is_disclosed(patch_text, fake_model):
+    fake_model(lambda content, n: {"issues": [issue(evidence="+invented()")], "highlights": []}
+               if content.startswith("Review this diff:")
+               else {"verdict": "approve", "summary": "Fine.", "issues": [], "highlights": []})
+    output = build_graph().invoke({"diff": patch_text(["+eval(user_input)"])})["output"]
+    assert output.verdict == "needs_discussion"
+    assert output.coverage.unverified_findings == 1
+    assert "discarded" in output.summary
+
+
+def test_loosely_quoted_evidence_is_pinned_to_verbatim_diff_lines(patch_text, fake_model):
+    lines = ["+def run(user_input):", "+    data = load()", "+    eval(user_input)"]
+    fake_model(lambda content, n: {"issues": [issue(evidence="def run(user_input):\n...\neval(user_input)",
+                                                    file="./app.py")], "highlights": []})
+    review = json.loads(nodes._review_chunk(patch_text(lines))[0])
+    assert review["issues"][0]["evidence"] == "\n".join(lines)
+    assert review["issues"][0]["file"] == "app.py"
 
 
 def test_invalid_verdict_fails_validation():
@@ -74,10 +103,23 @@ def test_synthesis_cannot_drop_or_downgrade_high_findings(patch_text, fake_model
 
 
 def test_synthesis_cannot_invent_evidence(patch_text, fake_model):
-    fake_model(lambda content, n: {"issues": [], "highlights": []} if content.startswith("Review this diff:")
-               else {"verdict": "request_changes", "summary": "Bad", "issues": [issue()], "highlights": []})
-    with pytest.raises(RuntimeError, match="during synthesis"):
-        build_graph().invoke({"diff": patch_text()})
+    calls = fake_model(lambda content, n: {"issues": [], "highlights": []} if content.startswith("Review this diff:")
+                       else {"verdict": "request_changes", "summary": "Bad", "issues": [issue()], "highlights": []})
+    output = build_graph().invoke({"diff": patch_text()})["output"]
+    assert len(calls) == 3  # one review, synthesis retried once
+    assert output.issues == []  # the invented finding never reaches the output
+
+
+def test_synthesis_requote_maps_back_to_verified_evidence(patch_text, fake_model):
+    lines = ["+x = 1", "+eval(user_input)"]
+    def responder(content, n):
+        if content.startswith("Review this diff:"):
+            return {"issues": [issue(severity="medium", evidence="+x = 1\n+eval(user_input)")], "highlights": []}
+        return {"verdict": "request_changes", "summary": "Bad", "highlights": [],
+                "issues": [issue(severity="medium", evidence="eval(user_input)")]}
+    fake_model(responder)
+    output = build_graph().invoke({"diff": patch_text(lines)})["output"]
+    assert output.issues[0].evidence == "+x = 1\n+eval(user_input)"
 
 
 def test_mixed_excluded_files_prevent_approval(patch_text, fake_model):
